@@ -65,8 +65,7 @@ public class DigitalIdController : ControllerBase
             {
                 UserId = request.UserId,
                 Role = request.Role,
-                StudentNumber = request.StudentNumber,
-                FacultyIdNumber = request.FacultyIdNumber,
+                IdNumber = request.IdNumber,
                 FullName = request.FullName,
                 Institute = request.Institute,
                 Course = request.Course,
@@ -210,8 +209,7 @@ public class DigitalIdController : ControllerBase
                 x.Id,
                 x.FullName,
                 x.Role,
-                x.StudentNumber,
-                x.FacultyIdNumber,
+                x.IdNumber,
                 x.Institute,
                 x.Course,
                 x.YearLevel,
@@ -486,7 +484,8 @@ public async Task<IActionResult> ApproveAll()
         {
             hasDigitalId = true,
 
-            studentNumber = request.StudentNumber,
+            idNumber = request.IdNumber,
+            position = request.Position,
 
             fullName = request.FullName,
             role = request.Role,

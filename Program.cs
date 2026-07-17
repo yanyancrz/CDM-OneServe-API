@@ -29,6 +29,11 @@ builder.Services.AddSingleton(sp =>
 });
 
 builder.Services.AddScoped<EmailService>();
+builder.Services.AddScoped<LibraryService>();
+builder.Services.AddScoped<BorrowService>();
+builder.Services.AddScoped<ReservationService>();
+builder.Services.AddScoped<BookService>();
+
 
 // CORS
 

@@ -23,4 +23,10 @@ public class AppDbContext : DbContext
 
     public DbSet<DigitalId> DigitalIds { get; set; }
 
+    public DbSet<Book> Books { get; set; }
+
+    public DbSet<BorrowTransaction> BorrowTransactions { get; set; }
+
+    public DbSet<Reservation> Reservations { get; set; }
+
 }

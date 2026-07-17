@@ -46,7 +46,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("EmailChangeRequests");
+                    b.ToTable("EmailChangeRequests", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.OTPVerification", b =>
@@ -82,7 +82,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("OTPVerifications");
+                    b.ToTable("OTPVerifications", (string)null);
                 });
 
             modelBuilder.Entity("User", b =>
@@ -132,7 +132,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 #pragma warning restore 612, 618
         }

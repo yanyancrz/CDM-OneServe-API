@@ -6,8 +6,7 @@ public class CreateDigitalIdRequestDto
 {
     public int UserId { get; set; }
     public string Role { get; set; } = "";
-    public string? StudentNumber { get; set; }
-    public string? FacultyIdNumber { get; set; }
+    public string IdNumber { get; set; }
     public string FullName { get; set; } = "";
     public string Institute { get; set; } = "";
     public string? Course { get; set; }

@@ -125,7 +125,7 @@ public class ProfileController : ControllerBase
         return Ok(new
         {
             user.Id,
-            user.StudentNumber,
+            user.IdNumber,
             user.FullName,
             user.Email,
             user.Role,

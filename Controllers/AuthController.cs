@@ -68,8 +68,8 @@ public class AuthController : ControllerBase
         var otpRecord =
             new OTPVerification
             {
-                StudentNumber =
-                    request.StudentNumber,
+                IdNumber =
+                    request.IdNumber,
 
                 FullName =
                     request.FullName,
@@ -132,7 +132,7 @@ public class AuthController : ControllerBase
 
         var user = new User
         {
-            StudentNumber = otpRecord.StudentNumber,
+            IdNumber = otpRecord.IdNumber,
             FullName = otpRecord.FullName,
             Email = otpRecord.Email,
             PasswordHash = otpRecord.PasswordHash,
@@ -180,7 +180,7 @@ public class AuthController : ControllerBase
         {
             message = "Login Successful",
             user.Id,
-            user.StudentNumber,
+            user.IdNumber,
             user.FullName,
             user.Email,
             user.Role,
@@ -302,5 +302,34 @@ public class AuthController : ControllerBase
         {
             message = "Password Updated Successfully"
         });
+    }
+
+    [HttpGet("users")]
+    public IActionResult GetUsers()
+    {
+        var users = _context.Users
+            .Select(x => new
+            {
+                x.Id,
+                x.IdNumber,
+                x.FullName,
+                x.Email,
+                x.Role,
+                x.Institute,
+                x.Course,
+                x.YearLevel,
+
+                Status = "Active",
+
+                DigitalIdStatus = _context.DigitalIdRequests
+                    .Where(d => d.UserId == x.Id)
+                    .Select(d => d.Status)
+                    .FirstOrDefault() ?? "None",
+
+                LastActive = x.CreatedAt
+            })
+            .ToList();
+
+        return Ok(users);
     }
 }

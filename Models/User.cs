@@ -2,7 +2,7 @@
 {
     public int Id { get; set; }
 
-    public string StudentNumber { get; set; } = "";
+    public string IdNumber { get; set; }
 
     public string FullName { get; set; } = "";
 
