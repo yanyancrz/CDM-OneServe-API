@@ -29,4 +29,10 @@ public class BorrowTransactionDto
     public string? Remarks { get; set; }
 
     public int OverdueDays { get; set; }
+
+    public int MaxRenewals { get; set; }
+
+    public bool CanRenew { get; set; }
+
+    public string RenewStatus { get; set; } = "";
 }

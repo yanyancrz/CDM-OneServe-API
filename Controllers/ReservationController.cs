@@ -1,4 +1,5 @@
-﻿using CDM_OneServe_API.Services;
+﻿using CDM_OneServe_API.DTOs;
+using CDM_OneServe_API.Services;
 using Microsoft.AspNetCore.Mvc;
 
 
@@ -14,9 +15,12 @@ public class ReservationController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> ReserveBook(int userId, int bookId)
+    public async Task<IActionResult> ReserveBook([FromBody] ReserveBookRequest request)
     {
-        var result = await _reservationService.ReserveBookAsync(userId, bookId);
+        var result = await _reservationService.ReserveBookAsync(
+            request.UserId,
+            request.BookId
+        );
 
         if (!result.Success)
             return BadRequest(result);

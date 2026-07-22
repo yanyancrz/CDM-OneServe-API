@@ -29,4 +29,14 @@ public class AppDbContext : DbContext
 
     public DbSet<Reservation> Reservations { get; set; }
 
+    public DbSet<LibraryActivity> LibraryActivities { get; set; }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<LibraryActivity>()
+            .HasKey(x => x.ActivityId);
+    }
+
 }

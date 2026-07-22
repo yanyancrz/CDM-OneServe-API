@@ -134,7 +134,7 @@ public class BorrowService
             return response;
         }
 
-        // Maximum borrowed books (3)
+        // Maximum borrowed books (3)ddot
         var borrowedCount = await _context.BorrowTransactions
             .CountAsync(x =>
                 x.UserId == transaction.UserId &&
@@ -160,6 +160,13 @@ public class BorrowService
         book.AvailableCopies--;
 
         _context.BorrowTransactions.Add(transaction);
+
+        AddActivity(
+        transaction.UserId,
+        transaction.BookId,
+        "Borrow",
+        "Book Borrowed",
+        $"You borrowed '{book.Title}'.");
 
         await _context.SaveChangesAsync();
 
@@ -238,7 +245,14 @@ public class BorrowService
         // Increase Available Copies
         borrow.Book.AvailableCopies++;
 
-        await _context.SaveChangesAsync();
+        AddActivity(
+        borrow.UserId,
+        borrow.BookId,
+        "Return",
+        "Book Returned",
+        $"You returned '{borrow.Book!.Title}'.");
+
+            await _context.SaveChangesAsync();
 
         response.Success = true;
         response.Message = "Book returned successfully.";
@@ -310,6 +324,13 @@ public class BorrowService
         // Increase renewal count
         borrow.RenewalCount++;
 
+        AddActivity(
+         borrow.UserId,
+         borrow.BookId,
+         "Renew",
+         "Book Renewed",
+         $"You renewed '{borrow.Book!.Title}'.");
+
         await _context.SaveChangesAsync();
 
         response.Success = true;
@@ -320,13 +341,28 @@ public class BorrowService
             BorrowId = borrow.BorrowId,
             UserId = borrow.UserId,
             BookId = borrow.BookId,
+
             BookTitle = borrow.Book!.Title,
             Author = borrow.Book.Author,
             CoverImage = borrow.Book.CoverImage,
+
             BorrowDate = borrow.BorrowDate,
             DueDate = borrow.DueDate,
             ReturnDate = borrow.ReturnDate,
+
             RenewalCount = borrow.RenewalCount,
+
+            MaxRenewals = 2,
+
+            CanRenew =
+        borrow.RenewalCount < 2 &&
+        borrow.DueDate.Date >= DateTime.Now.Date,
+
+            RenewStatus =
+        borrow.RenewalCount >= 2
+            ? "Not Eligible"
+            : "Eligible",
+
             Status = borrow.Status,
             Fine = borrow.Fine,
             Remarks = borrow.Remarks
@@ -351,13 +387,33 @@ public class BorrowService
                 BorrowId = x.BorrowId,
                 UserId = x.UserId,
                 BookId = x.BookId,
+
                 BookTitle = x.Book!.Title,
                 Author = x.Book.Author,
                 CoverImage = x.Book.CoverImage,
+
                 BorrowDate = x.BorrowDate,
                 DueDate = x.DueDate,
                 ReturnDate = x.ReturnDate,
+
                 RenewalCount = x.RenewalCount,
+
+                MaxRenewals = 2,
+
+                CanRenew =
+        x.Status == "Borrowed" &&
+        x.RenewalCount < 2 &&
+        x.DueDate.Date >= DateTime.Now.Date,
+
+                RenewStatus =
+        x.Status != "Borrowed"
+            ? "Not Eligible"
+            : x.DueDate.Date < DateTime.Now.Date
+                ? "Not Eligible"
+                : x.RenewalCount >= 2
+                    ? "Not Eligible"
+                    : "Eligible",
+
                 Status = x.Status,
                 Fine = x.Fine,
                 Remarks = x.Remarks
@@ -402,5 +458,23 @@ public class BorrowService
         }).ToList();
 
         return result;
+    }
+
+    private void AddActivity(
+    int userId,
+    int? bookId,
+    string type,
+    string title,
+    string description)
+    {
+        _context.LibraryActivities.Add(new LibraryActivity
+        {
+            UserId = userId,
+            BookId = bookId,
+            ActivityType = type,
+            Title = title,
+            Description = description,
+            CreatedAt = DateTime.Now
+        });
     }
 }

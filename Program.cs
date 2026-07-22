@@ -1,7 +1,7 @@
-using Microsoft.EntityFrameworkCore;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Services;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,6 +33,7 @@ builder.Services.AddScoped<LibraryService>();
 builder.Services.AddScoped<BorrowService>();
 builder.Services.AddScoped<ReservationService>();
 builder.Services.AddScoped<BookService>();
+builder.Services.AddScoped<LibraryActivityService>();
 
 
 // CORS
