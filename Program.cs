@@ -1,7 +1,12 @@
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Services;
+using CDM_OneServe_API.Services.DigitalIDAdmin;
+using CDM_OneServe_API.Services.Library;
+using CDM_OneServe_API.Services.LostFound;
 using Microsoft.EntityFrameworkCore;
+using CDM_OneServe_API.Services.LostFound;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,6 +39,11 @@ builder.Services.AddScoped<BorrowService>();
 builder.Services.AddScoped<ReservationService>();
 builder.Services.AddScoped<BookService>();
 builder.Services.AddScoped<LibraryActivityService>();
+builder.Services.AddScoped<LibraryNotificationService>();
+builder.Services.AddScoped<AdminProfileService>();
+builder.Services.AddScoped<AdminActivityService>();
+builder.Services.AddScoped<AdminNotificationService>();
+builder.Services.AddScoped<LostFoundService>();
 
 
 // CORS

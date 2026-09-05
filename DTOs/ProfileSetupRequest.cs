@@ -13,4 +13,8 @@ public class ProfileSetupRequest
     public string? Institute { get; set; }
 
     public string? YearLevel { get; set; }
+
+    public string? StudentStatus { get; set; }
+
+    public string? Position { get; set; }
 }

@@ -39,6 +39,8 @@ public class ProfileController : ControllerBase
         user.Institute = request.Institute;
         user.YearLevel = request.YearLevel;
         user.ContactNumber = request.ContactNumber;
+        user.StudentStatus = request.StudentStatus;
+        user.Position = request.Position;
 
         user.IsProfileComplete = true;
 
@@ -132,26 +134,40 @@ public class ProfileController : ControllerBase
             user.Institute,
             user.Course,
             user.YearLevel,
+            user.StudentStatus,
+            user.Position,
             user.ContactNumber,
             user.ProfilePicture,
             user.IsProfileComplete
         });
     }
+
     [HttpPut("update")]
-    public IActionResult UpdateProfile(
-        UpdateProfileRequest request)
+    public IActionResult UpdateProfile(UpdateProfileRequest request)
     {
-        var user = _context.Users
-            .FirstOrDefault(x =>
-                x.Id == request.UserId);
+        var user = _context.Users.FirstOrDefault(
+            x => x.Id == request.UserId
+        );
 
         if (user == null)
-        {
             return NotFound("User not found");
+
+        user.ContactNumber = request.ContactNumber;
+
+        // FACULTY
+        if (user.Role != null &&
+            user.Role.Equals("Faculty", StringComparison.OrdinalIgnoreCase))
+        {
+            user.Institute = request.Institute;
+            user.Position = request.Position;
         }
 
-        user.Email = request.Email;
-        user.ContactNumber = request.ContactNumber;
+        // STUDENT
+        if (user.Role != null &&
+            user.Role.Equals("Student", StringComparison.OrdinalIgnoreCase))
+        {
+            user.StudentStatus = request.StudentStatus;
+        }
 
         _context.SaveChanges();
 

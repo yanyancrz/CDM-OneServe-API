@@ -2,7 +2,7 @@
 {
     public int Id { get; set; }
 
-    public string IdNumber { get; set; }
+    public string IdNumber { get; set; } = "";
 
     public string FullName { get; set; } = "";
 
@@ -27,4 +27,8 @@
 
     public string? Role { get; set; } = "Student";
     public string? Institute { get; set; }
+
+    public string? StudentStatus { get; set; }
+
+    public string? Position { get; set; }
 }

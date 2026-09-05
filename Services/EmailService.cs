@@ -216,6 +216,99 @@ public class EmailService
             bodyHtml);
     }
 
+    // ==========================================
+    // ADMIN ALERT — NEW DIGITAL ID REQUEST
+    // ==========================================
+    public Task SendNewDigitalIdRequestAdminAlertAsync(
+        string adminEmail,
+        string requesterName)
+    {
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                New Digital ID Request
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                A new Digital ID request has been submitted and is
+                waiting for review.
+            </p>
+
+            <div style='
+                background:#F4D35E;
+                color:#1F1F1F;
+                padding:18px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:18px;
+            '>
+                {requesterName} submitted a new Digital ID request.
+            </div>
+
+            <p style='color:#555;line-height:1.8;'>
+                Please log in to the CDM OneServe Admin Portal to
+                review the request.
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            adminEmail,
+            "CDM OneServe - New Digital ID Request",
+            "Admin Notification",
+            bodyHtml);
+    }
+
+
+    // ==========================================
+    // ADMIN ALERT — PENDING REQUEST THRESHOLD
+    // ==========================================
+    public Task SendPendingDigitalIdThresholdAlertAsync(
+        string adminEmail,
+        int pendingCount)
+    {
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                Pending Digital ID Requests
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                The number of pending Digital ID requests has reached
+                the configured notification threshold.
+            </p>
+
+            <div style='
+                background:#F4D35E;
+                color:#1F1F1F;
+                text-align:center;
+                padding:20px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:20px;
+            '>
+                {pendingCount} Pending Requests
+            </div>
+
+            <p style='color:#555;line-height:1.8;'>
+                There are now <strong>{pendingCount}</strong> pending
+                Digital ID requests waiting for review.
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                Please log in to the CDM OneServe Admin Portal to
+                review the pending requests.
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            adminEmail,
+            "CDM OneServe - Pending Digital ID Request Threshold",
+            "Admin Notification",
+            bodyHtml);
+    }
+
+
+
     /// <summary>
     /// Builds the shared CDM OneServe email shell (header with logo, content
     /// area, footer) around the given body HTML, and sends it. Every email

@@ -2,7 +2,7 @@
 
 public class RegisterRequest
 {
-    public string IdNumber { get; set; }
+    public string IdNumber { get; set; } = "";
 
     public string FullName { get; set; } = "";
 

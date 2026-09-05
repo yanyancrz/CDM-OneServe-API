@@ -7,4 +7,12 @@ public class UpdateProfileRequest
     public string Email { get; set; } = "";
 
     public string ContactNumber { get; set; } = "";
+
+    // Faculty
+    public string? Institute { get; set; }
+
+    public string? Position { get; set; }
+
+    // Student
+    public string? StudentStatus { get; set; }
 }
