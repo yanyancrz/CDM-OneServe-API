@@ -332,4 +332,18 @@ public class AuthController : ControllerBase
 
         return Ok(users);
     }
+
+    [HttpGet("generate-admin-hash")]
+    public IActionResult GenerateAdminHash()
+    {
+        var password = "admin123";
+
+        var hash = BCrypt.Net.BCrypt.HashPassword(password);
+
+        return Ok(new
+        {
+            password = password,
+            hash = hash
+        });
+    }
 }
