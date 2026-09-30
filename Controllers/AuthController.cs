@@ -51,6 +51,12 @@ public class AuthController : ControllerBase
         return Ok("API Connected");
     }
 
+    [HttpGet("version")]
+    public IActionResult Version()
+    {
+        return Ok("AUTH-JWT-v2");
+    }
+
     // =========================================================
     // HELPER — NORMALIZE NAME
     // =========================================================
@@ -941,34 +947,122 @@ public class AuthController : ControllerBase
             });
         }
 
-        // =====================================================
+        // =========================================================
+        // GENERATE JWT TOKEN
+        // =========================================================
+
+        var jwtKey =
+            _configuration["Jwt:Key"];
+
+        if (string.IsNullOrWhiteSpace(jwtKey))
+        {
+            return StatusCode(500, new
+            {
+                message = "JWT configuration is missing."
+            });
+        }
+
+        var claims = new List<Claim>
+{
+    new Claim(
+        ClaimTypes.NameIdentifier,
+        user.Id.ToString()
+    ),
+
+    new Claim(
+        ClaimTypes.Name,
+        user.FullName ?? ""
+    ),
+
+    new Claim(
+        ClaimTypes.Email,
+        user.Email ?? ""
+    ),
+
+    new Claim(
+        ClaimTypes.Role,
+        user.Role ?? ""
+    ),
+
+    new Claim(
+        "idNumber",
+        user.IdNumber ?? ""
+    ),
+
+    new Claim(
+        "adminModule",
+        user.AdminModule ?? ""
+    )
+};
+
+        var key =
+            new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(jwtKey)
+            );
+
+        var credentials =
+            new SigningCredentials(
+                key,
+                SecurityAlgorithms.HmacSha256
+            );
+
+        var tokenDescriptor =
+            new SecurityTokenDescriptor
+            {
+                Subject = new ClaimsIdentity(claims),
+
+                Expires =
+                    DateTime.UtcNow.AddHours(8),
+
+                SigningCredentials =
+                    credentials
+            };
+
+        var tokenHandler =
+            new JwtSecurityTokenHandler();
+
+        var token =
+            tokenHandler.CreateToken(
+                tokenDescriptor
+            );
+
+        var jwtToken =
+            tokenHandler.WriteToken(token);
+
+
+        // =========================================================
         // LOGIN SUCCESS
-        // =====================================================
+        // =========================================================
 
         return Ok(new
         {
-            message =
-                "Login Successful",
+            message = "Login Successful",
 
-            user.Id,
-            user.IdNumber,
-            user.FullName,
-            user.Email,
-            user.Role,
-            user.AdminModule,
+            token = jwtToken,
 
-            user.Institute,
-            user.Course,
-            user.YearLevel,
-            user.ContactNumber,
-            user.ProfilePicture,
-            user.IsProfileComplete,
+            user = new
+            {
+                user.Id,
+                user.IdNumber,
+                user.FullName,
+                user.Email,
+                user.Role,
+                user.AdminModule,
 
-            user.AccountStatus,
-            user.PhysicalIdVerificationStatus,
+                user.Institute,
+                user.Course,
+                user.YearLevel,
+                user.ContactNumber,
+                user.ProfilePicture,
+                user.IsProfileComplete,
 
-            requiresSetupProfile =
-                !user.IsProfileComplete
+                user.AccountStatus,
+                user.PhysicalIdVerificationStatus,
+
+                requiresSetupProfile =
+                    !user.IsProfileComplete
+            }
+
         });
     }
 
@@ -977,275 +1071,275 @@ public class AuthController : ControllerBase
     // =========================================================
 
     [HttpPost("forgot-password")]
-    public async Task<IActionResult> ForgotPassword(
+        public async Task<IActionResult> ForgotPassword(
         ForgotPasswordRequest request)
-    {
-        var email =
-            request.Email?.Trim();
-
-        var user =
-            await _context.Users
-                .FirstOrDefaultAsync(x =>
-                    x.Email == email);
-
-        if (user == null)
-        {
-            return BadRequest(new
-            {
-                message =
-                    "Email not found."
-            });
-        }
-
-        var otpCode =
-            Random.Shared
-                .Next(100000, 999999)
-                .ToString();
-
-        var existing =
-            await _context.PasswordResetOTPs
-                .FirstOrDefaultAsync(x =>
-                    x.Email == email);
-
-        if (existing != null)
-        {
-            _context.PasswordResetOTPs
-                .Remove(existing);
-        }
-
-        _context.PasswordResetOTPs.Add(
-            new PasswordResetOTP
-            {
-                Email =
-                    email!,
-
-                OTPCode =
-                    otpCode,
-
-                ExpiryDate =
-                    DateTime.Now
-                        .AddMinutes(5)
-            });
-
-        await _context.SaveChangesAsync();
-
-        await _emailService.SendOtpAsync(
-            email!,
-            otpCode,
-            "forgotpassword"
-        );
-
-        return Ok(new
-        {
-            message =
-                "OTP Sent"
-        });
-    }
-
-    // =========================================================
-    // RESET PASSWORD
-    // =========================================================
-
-    [HttpPost("reset-password")]
-    public async Task<IActionResult> ResetPassword(
-        ResetPasswordRequest request)
-    {
-        var otpRecord =
-            await _context.PasswordResetOTPs
-                .FirstOrDefaultAsync(x =>
-                    x.Email ==
-                        request.Email &&
-                    x.OTPCode ==
-                        request.OTPCode);
-
-        if (otpRecord == null)
-        {
-            return BadRequest(new
-            {
-                message =
-                    "Invalid OTP"
-            });
-        }
-
-        if (otpRecord.ExpiryDate <
-            DateTime.Now)
-        {
-            return BadRequest(new
-            {
-                message =
-                    "OTP Expired"
-            });
-        }
-
-        var user =
-            await _context.Users
-                .FirstOrDefaultAsync(x =>
-                    x.Email ==
-                    request.Email);
-
-        if (user == null)
-        {
-            return BadRequest(new
-            {
-                message =
-                    "User not found"
-            });
-        }
-
-        // =====================================================
-        // UPDATE PASSWORD
-        // =====================================================
-
-        user.PasswordHash =
-            BCrypt.Net.BCrypt
-                .HashPassword(
-                    request.NewPassword
-                );
-
-        // =====================================================
-        // RECORD USER ACTIVITY
-        // =====================================================
-
-        _context.UserActivities.Add(
-            new UserActivity
-            {
-                UserId =
-                    user.Id,
-
-                Action =
-                    "Reset password",
-
-                Description =
-                    "You reset your account password.",
-
-                CreatedAt =
-                    DateTime.Now
-            });
-
-        // =====================================================
-        // REMOVE USED OTP
-        // =====================================================
-
-        _context.PasswordResetOTPs
-            .Remove(otpRecord);
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
-        {
-            message =
-                "Password Updated Successfully"
-        });
-    }
-
-    // =========================================================
-    // GET USERS
-    // =========================================================
-
-    [HttpGet("users")]
-    public async Task<IActionResult> GetUsers()
-    {
-        var users =
-            await _context.Users
-                .Select(x => new
-                {
-                    x.Id,
-                    x.IdNumber,
-                    x.FullName,
-                    x.Email,
-                    x.Role,
-                    x.AdminModule,
-
-                    x.Institute,
-                    x.Course,
-                    x.YearLevel,
-
-                    Status =
-                        x.AccountStatus,
-
-                    x.PhysicalIdVerificationStatus,
-                    x.PhysicalIdDocument,
-
-                    LastActive =
-                        x.CreatedAt
-                })
-                .ToListAsync();
-
-        return Ok(users);
-    }
-
-    // =========================================================
-    // UPDATE USER
-    // =========================================================
-
-    [HttpPut("users/{id}")]
-    public async Task<IActionResult> UpdateUser(
-        int id,
-        [FromBody] UpdateUserRequest request)
-    {
-        var user =
-            await _context.Users
-                .FirstOrDefaultAsync(x =>
-                    x.Id == id);
-
-        if (user == null)
-        {
-            return NotFound(new
-            {
-                message =
-                    "User not found."
-            });
-        }
-
-        // =====================================================
-        // DO NOT ALLOW IDENTITY CHANGES
-        // =====================================================
-        //
-        // FullName
-        // IdNumber
-        //
-        // These remain controlled by School Records.
-        // =====================================================
-
-        // =====================================================
-        // EMAIL
-        // =====================================================
-
-        if (!string.IsNullOrWhiteSpace(
-                request.Email))
         {
             var email =
-                request.Email.Trim();
+                request.Email?.Trim();
 
-            var emailExists =
+            var user =
                 await _context.Users
-                    .AnyAsync(x =>
-                        x.Id != id &&
+                    .FirstOrDefaultAsync(x =>
                         x.Email == email);
 
-            if (emailExists)
+            if (user == null)
             {
                 return BadRequest(new
                 {
                     message =
-                        "Email is already being used by another account."
+                        "Email not found."
                 });
             }
 
-            user.Email =
-                email;
+            var otpCode =
+                Random.Shared
+                    .Next(100000, 999999)
+                    .ToString();
+
+            var existing =
+                await _context.PasswordResetOTPs
+                    .FirstOrDefaultAsync(x =>
+                        x.Email == email);
+
+            if (existing != null)
+            {
+                _context.PasswordResetOTPs
+                    .Remove(existing);
+            }
+
+            _context.PasswordResetOTPs.Add(
+                new PasswordResetOTP
+                {
+                    Email =
+                        email!,
+
+                    OTPCode =
+                        otpCode,
+
+                    ExpiryDate =
+                        DateTime.Now
+                            .AddMinutes(5)
+                });
+
+            await _context.SaveChangesAsync();
+
+            await _emailService.SendOtpAsync(
+                email!,
+                otpCode,
+                "forgotpassword"
+            );
+
+            return Ok(new
+            {
+                message =
+                    "OTP Sent"
+            });
         }
 
-        // =====================================================
-        // ROLE
-        // =====================================================
+        // =========================================================
+        // RESET PASSWORD
+        // =========================================================
 
-        var role =
-            request.Role?.Trim();
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword(
+            ResetPasswordRequest request)
+        {
+            var otpRecord =
+                await _context.PasswordResetOTPs
+                    .FirstOrDefaultAsync(x =>
+                        x.Email ==
+                            request.Email &&
+                        x.OTPCode ==
+                            request.OTPCode);
 
-        var validRoles =
-            new[]
+            if (otpRecord == null)
             {
+                return BadRequest(new
+                {
+                    message =
+                        "Invalid OTP"
+                });
+            }
+
+            if (otpRecord.ExpiryDate <
+                DateTime.Now)
+            {
+                return BadRequest(new
+                {
+                    message =
+                        "OTP Expired"
+                });
+            }
+
+            var user =
+                await _context.Users
+                    .FirstOrDefaultAsync(x =>
+                        x.Email ==
+                        request.Email);
+
+            if (user == null)
+            {
+                return BadRequest(new
+                {
+                    message =
+                        "User not found"
+                });
+            }
+
+            // =====================================================
+            // UPDATE PASSWORD
+            // =====================================================
+
+            user.PasswordHash =
+                BCrypt.Net.BCrypt
+                    .HashPassword(
+                        request.NewPassword
+                    );
+
+            // =====================================================
+            // RECORD USER ACTIVITY
+            // =====================================================
+
+            _context.UserActivities.Add(
+                new UserActivity
+                {
+                    UserId =
+                        user.Id,
+
+                    Action =
+                        "Reset password",
+
+                    Description =
+                        "You reset your account password.",
+
+                    CreatedAt =
+                        DateTime.Now
+                });
+
+            // =====================================================
+            // REMOVE USED OTP
+            // =====================================================
+
+            _context.PasswordResetOTPs
+                .Remove(otpRecord);
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message =
+                    "Password Updated Successfully"
+            });
+        }
+
+        // =========================================================
+        // GET USERS
+        // =========================================================
+
+        [HttpGet("users")]
+        public async Task<IActionResult> GetUsers()
+        {
+            var users =
+                await _context.Users
+                    .Select(x => new
+                    {
+                        x.Id,
+                        x.IdNumber,
+                        x.FullName,
+                        x.Email,
+                        x.Role,
+                        x.AdminModule,
+
+                        x.Institute,
+                        x.Course,
+                        x.YearLevel,
+
+                        Status =
+                            x.AccountStatus,
+
+                        x.PhysicalIdVerificationStatus,
+                        x.PhysicalIdDocument,
+
+                        LastActive =
+                            x.CreatedAt
+                    })
+                    .ToListAsync();
+
+            return Ok(users);
+        }
+
+        // =========================================================
+        // UPDATE USER
+        // =========================================================
+
+        [HttpPut("users/{id}")]
+        public async Task<IActionResult> UpdateUser(
+            int id,
+            [FromBody] UpdateUserRequest request)
+        {
+            var user =
+                await _context.Users
+                    .FirstOrDefaultAsync(x =>
+                        x.Id == id);
+
+            if (user == null)
+            {
+                return NotFound(new
+                {
+                    message =
+                        "User not found."
+                });
+            }
+
+            // =====================================================
+            // DO NOT ALLOW IDENTITY CHANGES
+            // =====================================================
+            //
+            // FullName
+            // IdNumber
+            //
+            // These remain controlled by School Records.
+            // =====================================================
+
+            // =====================================================
+            // EMAIL
+            // =====================================================
+
+            if (!string.IsNullOrWhiteSpace(
+                    request.Email))
+            {
+                var email =
+                    request.Email.Trim();
+
+                var emailExists =
+                    await _context.Users
+                        .AnyAsync(x =>
+                            x.Id != id &&
+                            x.Email == email);
+
+                if (emailExists)
+                {
+                    return BadRequest(new
+                    {
+                        message =
+                            "Email is already being used by another account."
+                    });
+                }
+
+                user.Email =
+                    email;
+            }
+
+            // =====================================================
+            // ROLE
+            // =====================================================
+
+            var role =
+                request.Role?.Trim();
+
+            var validRoles =
+                new[]
+                {
                 "Student",
                 "Faculty",
                 "Admin",
@@ -1255,462 +1349,463 @@ public class AuthController : ControllerBase
                 "GuidanceAdmin",
                 "LibraryAdmin",
                 "LibraryStaff"
-            };
+                };
 
-        if (!string.IsNullOrWhiteSpace(role) &&
-            !validRoles.Contains(role))
-        {
-            return BadRequest(new
+            if (!string.IsNullOrWhiteSpace(role) &&
+                !validRoles.Contains(role))
             {
-                message =
-                    "Invalid role."
-            });
-        }
-
-        if (!string.IsNullOrWhiteSpace(role))
-        {
-            user.Role =
-                role;
-        }
-
-        // =====================================================
-        // ADMIN MODULE
-        // =====================================================
-
-        if (request.AdminModule != null)
-        {
-            var module =
-                request.AdminModule.Trim();
-
-            var validModules =
-                new[]
+                return BadRequest(new
                 {
+                    message =
+                        "Invalid role."
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(role))
+            {
+                user.Role =
+                    role;
+            }
+
+            // =====================================================
+            // ADMIN MODULE
+            // =====================================================
+
+            if (request.AdminModule != null)
+            {
+                var module =
+                    request.AdminModule.Trim();
+
+                var validModules =
+                    new[]
+                    {
                     "Lost & Found",
                     "Clinic",
                     "Business Hub",
                     "Guidance",
                     "Library"
-                };
+                    };
 
-            if (user.Role == "Admin")
-            {
-                if (string.IsNullOrWhiteSpace(module))
+                if (user.Role == "Admin")
                 {
-                    user.AdminModule =
-                        null;
-                }
-                else if (!validModules.Contains(module))
-                {
-                    return BadRequest(new
+                    if (string.IsNullOrWhiteSpace(module))
                     {
-                        message =
-                            "Invalid admin module."
-                    });
-                }
-                else
-                {
-                    user.AdminModule =
-                        module;
-
-                    user.Role =
-                        module switch
+                        user.AdminModule =
+                            null;
+                    }
+                    else if (!validModules.Contains(module))
+                    {
+                        return BadRequest(new
                         {
-                            "Lost & Found"
-                                => "LostFoundAdmin",
+                            message =
+                                "Invalid admin module."
+                        });
+                    }
+                    else
+                    {
+                        user.AdminModule =
+                            module;
 
-                            "Clinic"
-                                => "ClinicAdmin",
+                        user.Role =
+                            module switch
+                            {
+                                "Lost & Found"
+                                    => "LostFoundAdmin",
 
-                            "Business Hub"
-                                => "BusinessHubAdmin",
+                                "Clinic"
+                                    => "ClinicAdmin",
 
-                            "Guidance"
-                                => "GuidanceAdmin",
+                                "Business Hub"
+                                    => "BusinessHubAdmin",
 
-                            "Library"
-                                => "LibraryAdmin",
+                                "Guidance"
+                                    => "GuidanceAdmin",
 
-                            _ => "Admin"
-                        };
+                                "Library"
+                                    => "LibraryAdmin",
+
+                                _ => "Admin"
+                            };
+                    }
                 }
-            }
-            else if (
-                user.Role == "LostFoundAdmin" ||
-                user.Role == "ClinicAdmin" ||
-                user.Role == "BusinessHubAdmin" ||
-                user.Role == "GuidanceAdmin" ||
-                user.Role == "LibraryAdmin")
-            {
-                if (!string.IsNullOrWhiteSpace(module))
+                else if (
+                    user.Role == "LostFoundAdmin" ||
+                    user.Role == "ClinicAdmin" ||
+                    user.Role == "BusinessHubAdmin" ||
+                    user.Role == "GuidanceAdmin" ||
+                    user.Role == "LibraryAdmin")
                 {
-                    user.AdminModule =
-                        module;
+                    if (!string.IsNullOrWhiteSpace(module))
+                    {
+                        user.AdminModule =
+                            module;
+                    }
                 }
             }
-        }
 
-        // =====================================================
-        // IMPORTANT
-        // =====================================================
-        //
-        // Do not modify:
-        //
-        // user.FullName
-        // user.IdNumber
-        //
-        // Also do not use User Management to overwrite the
-        // official Course / Institute / YearLevel of students.
-        // =====================================================
+            // =====================================================
+            // IMPORTANT
+            // =====================================================
+            //
+            // Do not modify:
+            //
+            // user.FullName
+            // user.IdNumber
+            //
+            // Also do not use User Management to overwrite the
+            // official Course / Institute / YearLevel of students.
+            // =====================================================
 
-        await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync();
 
-        return Ok(new
-        {
-            message =
-                "User updated successfully.",
-
-            user = new
-            {
-                user.Id,
-                user.IdNumber,
-                user.FullName,
-                user.Email,
-                user.Role,
-                user.AdminModule,
-                user.Institute,
-                user.Course,
-                user.YearLevel,
-
-                Status =
-                    user.AccountStatus,
-
-                user.PhysicalIdVerificationStatus
-            }
-        });
-    }
-
-    // =========================================================
-    // UPDATE ACCOUNT STATUS
-    // =========================================================
-
-    [HttpPut("users/{id}/status")]
-    public async Task<IActionResult> UpdateUserStatus(
-        int id,
-        [FromBody] UpdateUserStatusRequest request)
-    {
-        var user =
-            await _context.Users
-                .FirstOrDefaultAsync(x =>
-                    x.Id == id);
-
-        if (user == null)
-        {
-            return NotFound(new
+            return Ok(new
             {
                 message =
-                    "User not found."
+                    "User updated successfully.",
+
+                user = new
+                {
+                    user.Id,
+                    user.IdNumber,
+                    user.FullName,
+                    user.Email,
+                    user.Role,
+                    user.AdminModule,
+                    user.Institute,
+                    user.Course,
+                    user.YearLevel,
+
+                    Status =
+                        user.AccountStatus,
+
+                    user.PhysicalIdVerificationStatus
+                }
             });
         }
 
-        var status =
-            request.Status?.Trim();
+        // =========================================================
+        // UPDATE ACCOUNT STATUS
+        // =========================================================
 
-        if (status != "Active" &&
-            status != "Pending" &&
-            status != "Suspended" &&
-            status != "Rejected")
+        [HttpPut("users/{id}/status")]
+        public async Task<IActionResult> UpdateUserStatus(
+            int id,
+            [FromBody] UpdateUserStatusRequest request)
         {
-            return BadRequest(new
+            var user =
+                await _context.Users
+                    .FirstOrDefaultAsync(x =>
+                        x.Id == id);
+
+            if (user == null)
+            {
+                return NotFound(new
+                {
+                    message =
+                        "User not found."
+                });
+            }
+
+            var status =
+                request.Status?.Trim();
+
+            if (status != "Active" &&
+                status != "Pending" &&
+                status != "Suspended" &&
+                status != "Rejected")
+            {
+                return BadRequest(new
+                {
+                    message =
+                        "Invalid account status."
+                });
+            }
+
+            user.AccountStatus =
+                status;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
             {
                 message =
-                    "Invalid account status."
+                    "Account status updated successfully.",
+
+                user = new
+                {
+                    user.Id,
+                    user.IdNumber,
+                    user.FullName,
+                    user.Email,
+                    user.Role,
+                    user.AdminModule,
+                    user.Institute,
+                    user.Course,
+                    user.YearLevel,
+
+                    Status =
+                        user.AccountStatus
+                }
             });
         }
 
-        user.AccountStatus =
-            status;
+        // =========================================================
+        // GENERATE ADMIN HASH
+        // =========================================================
 
-        await _context.SaveChangesAsync();
-
-        return Ok(new
+        [HttpGet("generate-admin-hash")]
+        public IActionResult GenerateAdminHash()
         {
-            message =
-                "Account status updated successfully.",
+            var password =
+                "admin123";
 
-            user = new
+            var hash =
+                BCrypt.Net.BCrypt
+                    .HashPassword(
+                        password
+                    );
+
+            return Ok(new
             {
-                user.Id,
-                user.IdNumber,
-                user.FullName,
-                user.Email,
-                user.Role,
-                user.AdminModule,
-                user.Institute,
-                user.Course,
-                user.YearLevel,
+                password,
+                hash
+            });
+        }
 
-                Status =
-                    user.AccountStatus
-            }
-        });
-    }
+        // =========================================================
+        // UPLOAD PHYSICAL ID
+        // =========================================================
 
-    // =========================================================
-    // GENERATE ADMIN HASH
-    // =========================================================
-
-    [HttpGet("generate-admin-hash")]
-    public IActionResult GenerateAdminHash()
-    {
-        var password =
-            "admin123";
-
-        var hash =
-            BCrypt.Net.BCrypt
-                .HashPassword(
-                    password
-                );
-
-        return Ok(new
+        [HttpPost("upload-physical-id")]
+        [RequestSizeLimit(5 * 1024 * 1024)]
+        public async Task<IActionResult> UploadPhysicalId(
+            IFormFile file)
         {
-            password,
-            hash
-        });
-    }
+            const long maxFileSize =
+                5 * 1024 * 1024;
 
-    // =========================================================
-    // UPLOAD PHYSICAL ID
-    // =========================================================
-
-    [HttpPost("upload-physical-id")]
-    [RequestSizeLimit(5 * 1024 * 1024)]
-    public async Task<IActionResult> UploadPhysicalId(
-        IFormFile file)
-    {
-        const long maxFileSize =
-            5 * 1024 * 1024;
-
-        string[] allowedExtensions =
-        {
+            string[] allowedExtensions =
+            {
             ".jpg",
             ".jpeg",
             ".png",
             ".webp"
         };
 
-        if (file == null ||
-            file.Length == 0)
-        {
-            return BadRequest(new
+            if (file == null ||
+                file.Length == 0)
             {
-                message =
-                    "Please select a physical ID image."
-            });
-        }
+                return BadRequest(new
+                {
+                    message =
+                        "Please select a physical ID image."
+                });
+            }
 
-        if (file.Length >
-            maxFileSize)
-        {
-            return BadRequest(new
+            if (file.Length >
+                maxFileSize)
             {
-                message =
-                    "Physical ID image must be 5 MB or smaller."
-            });
-        }
+                return BadRequest(new
+                {
+                    message =
+                        "Physical ID image must be 5 MB or smaller."
+                });
+            }
 
-        if (string.IsNullOrWhiteSpace(
-                file.ContentType) ||
-            !file.ContentType.StartsWith(
-                "image/",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return BadRequest(new
+            if (string.IsNullOrWhiteSpace(
+                    file.ContentType) ||
+                !file.ContentType.StartsWith(
+                    "image/",
+                    StringComparison.OrdinalIgnoreCase))
             {
-                message =
-                    "Only image files are allowed."
-            });
-        }
+                return BadRequest(new
+                {
+                    message =
+                        "Only image files are allowed."
+                });
+            }
 
-        var extension =
-            Path.GetExtension(
-                file.FileName)
-                .ToLowerInvariant();
+            var extension =
+                Path.GetExtension(
+                    file.FileName)
+                    .ToLowerInvariant();
 
-        if (!allowedExtensions.Contains(
-                extension))
-        {
-            return BadRequest(new
+            if (!allowedExtensions.Contains(
+                    extension))
             {
-                message =
-                    "Allowed formats: JPG, JPEG, PNG, and WEBP."
-            });
-        }
+                return BadRequest(new
+                {
+                    message =
+                        "Allowed formats: JPG, JPEG, PNG, and WEBP."
+                });
+            }
 
-        var webRootPath =
-            _environment.WebRootPath;
+            var webRootPath =
+                _environment.WebRootPath;
 
-        if (string.IsNullOrWhiteSpace(
-                webRootPath))
-        {
-            webRootPath =
+            if (string.IsNullOrWhiteSpace(
+                    webRootPath))
+            {
+                webRootPath =
+                    Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        "wwwroot"
+                    );
+            }
+
+            var uploadFolder =
                 Path.Combine(
-                    Directory.GetCurrentDirectory(),
-                    "wwwroot"
+                    webRootPath,
+                    "uploads",
+                    "physical-id"
                 );
+
+            Directory.CreateDirectory(
+                uploadFolder
+            );
+
+            var fileName =
+                $"{Guid.NewGuid():N}{extension}";
+
+            var filePath =
+                Path.Combine(
+                    uploadFolder,
+                    fileName
+                );
+
+            await using var stream =
+                new FileStream(
+                    filePath,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None
+                );
+
+            await file.CopyToAsync(stream);
+
+            var documentPath =
+                $"/uploads/physical-id/{fileName}";
+
+            return Ok(new
+            {
+                physicalIdDocument =
+                    documentPath
+            });
         }
 
-        var uploadFolder =
-            Path.Combine(
-                webRootPath,
-                "uploads",
-                "physical-id"
-            );
+        // =========================================================
+        // DELETE USER ACCOUNT — SOFT DELETE
+        // =========================================================
+        //
+        // The account is marked as Deleted instead of physically removed.
+        // This preserves historical records in modules that reference the
+        // User.Id through foreign keys.
+        //
+        // The official StudentRecord / FacultyRecord is NOT modified.
+        // A deleted account can register again and the same User row is
+        // reactivated during OTP verification.
+        // =========================================================
 
-        Directory.CreateDirectory(
-            uploadFolder
-        );
-
-        var fileName =
-            $"{Guid.NewGuid():N}{extension}";
-
-        var filePath =
-            Path.Combine(
-                uploadFolder,
-                fileName
-            );
-
-        await using var stream =
-            new FileStream(
-                filePath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None
-            );
-
-        await file.CopyToAsync(stream);
-
-        var documentPath =
-            $"/uploads/physical-id/{fileName}";
-
-        return Ok(new
+        [HttpDelete("users/{id}")]
+        public async Task<IActionResult> DeleteUser(
+            int id)
         {
-            physicalIdDocument =
-                documentPath
-        });
+            var user =
+                await _context.Users
+                    .FirstOrDefaultAsync(x =>
+                        x.Id == id);
+
+            if (user == null)
+            {
+                return NotFound(new
+                {
+                    message =
+                        "User not found."
+                });
+            }
+
+            if (user.Role == "SuperAdmin")
+            {
+                return BadRequest(new
+                {
+                    message =
+                        "The Super Admin account cannot be deleted."
+                });
+            }
+
+            if (string.Equals(
+                    user.AccountStatus,
+                    "Deleted",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new
+                {
+                    message =
+                        "This account is already deleted."
+                });
+            }
+
+            user.AccountStatus =
+                "Deleted";
+
+            user.IsVerified =
+                false;
+
+            user.PhysicalIdVerificationStatus =
+                "Pending";
+
+            user.PhysicalIdVerifiedAt =
+                null;
+
+            user.PhysicalIdReviewedBy =
+                null;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message =
+                    "User account deleted successfully. Historical records and the official School Record were preserved.",
+
+                deletedUserId =
+                    id,
+
+                accountStatus =
+                    user.AccountStatus,
+
+                schoolRecordPreserved =
+                    true
+            });
+        }
     }
 
-    // =========================================================
-    // DELETE USER ACCOUNT — SOFT DELETE
-    // =========================================================
-    //
-    // The account is marked as Deleted instead of physically removed.
-    // This preserves historical records in modules that reference the
-    // User.Id through foreign keys.
-    //
-    // The official StudentRecord / FacultyRecord is NOT modified.
-    // A deleted account can register again and the same User row is
-    // reactivated during OTP verification.
-    // =========================================================
 
-    [HttpDelete("users/{id}")]
-    public async Task<IActionResult> DeleteUser(
-        int id)
+    // =============================================================
+    // UPDATE USER REQUEST
+    // =============================================================
+
+    public class UpdateUserRequest
     {
-        var user =
-            await _context.Users
-                .FirstOrDefaultAsync(x =>
-                    x.Id == id);
+        public string? Email { get; set; }
 
-        if (user == null)
-        {
-            return NotFound(new
-            {
-                message =
-                    "User not found."
-            });
-        }
+        public string? Role { get; set; }
 
-        if (user.Role == "SuperAdmin")
-        {
-            return BadRequest(new
-            {
-                message =
-                    "The Super Admin account cannot be deleted."
-            });
-        }
+        public string? AdminModule { get; set; }
 
-        if (string.Equals(
-                user.AccountStatus,
-                "Deleted",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return BadRequest(new
-            {
-                message =
-                    "This account is already deleted."
-            });
-        }
+        public string? Institute { get; set; }
 
-        user.AccountStatus =
-            "Deleted";
+        public string? Course { get; set; }
 
-        user.IsVerified =
-            false;
-
-        user.PhysicalIdVerificationStatus =
-            "Pending";
-
-        user.PhysicalIdVerifiedAt =
-            null;
-
-        user.PhysicalIdReviewedBy =
-            null;
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
-        {
-            message =
-                "User account deleted successfully. Historical records and the official School Record were preserved.",
-
-            deletedUserId =
-                id,
-
-            accountStatus =
-                user.AccountStatus,
-
-            schoolRecordPreserved =
-                true
-        });
+        public string? YearLevel { get; set; }
     }
-}
 
 
-// =============================================================
-// UPDATE USER REQUEST
-// =============================================================
+    // =============================================================
+    // UPDATE USER STATUS REQUEST
+    // =============================================================
 
-public class UpdateUserRequest
-{
-    public string? Email { get; set; }
+    public class UpdateUserStatusRequest
+    {
+        public string? Status { get; set; }
+    }
 
-    public string? Role { get; set; }
-
-    public string? AdminModule { get; set; }
-
-    public string? Institute { get; set; }
-
-    public string? Course { get; set; }
-
-    public string? YearLevel { get; set; }
-}
-
-
-// =============================================================
-// UPDATE USER STATUS REQUEST
-// =============================================================
-
-public class UpdateUserStatusRequest
-{
-    public string? Status { get; set; }
-}

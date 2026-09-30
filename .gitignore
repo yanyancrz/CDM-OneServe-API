@@ -1,10 +1,28 @@
+# Build output
 bin/
 obj/
+publish/
+
+# Visual Studio / Rider / VS Code
 .vs/
-
-appsettings.Development.json
-
+.idea/
+.vscode/
 *.user
 *.suo
 
+# Secrets (DO NOT COMMIT)
+appsettings.Production.json
+appsettings.Local.json
+secrets.json
+*.pfx
+
+# Uploaded files (physical IDs, etc.)
 wwwroot/uploads/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
