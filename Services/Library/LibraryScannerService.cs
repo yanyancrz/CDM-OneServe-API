@@ -146,14 +146,18 @@ public class LibraryScannerService
 
         // FIX: the system uses "Active" (not "Approved").
         // AuthController sets: Active / Pending / Suspended / Rejected / Deleted
-        if (!string.Equals(
-                user.AccountStatus,
-                "Active",
-                StringComparison.OrdinalIgnoreCase))
+        // Accept both status names used by the system
+        var status = user.AccountStatus?.Trim() ?? "";
+
+        var isAllowed =
+            status.Equals("Active", StringComparison.OrdinalIgnoreCase) ||
+            status.Equals("Approved", StringComparison.OrdinalIgnoreCase);
+
+        if (!isAllowed)
         {
             return CreateResult(user, false, 0, borrowLimit,
-                user.AccountStatus ?? "Unknown",
-                $"Account is not active (status: {user.AccountStatus}).");
+                string.IsNullOrEmpty(status) ? "Unknown" : status,
+                $"Account is not active (status: {status}).");
         }
 
         // ==========================================
