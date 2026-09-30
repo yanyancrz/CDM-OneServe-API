@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text;
 
 using CDM_OneServe_API.Data;
@@ -95,6 +96,15 @@ if (string.IsNullOrWhiteSpace(jwtKey))
     );
 }
 
+// HmacSha256 needs a key of at least 32 bytes (256 bits).
+// A shorter key makes token creation throw -> login returns 500.
+if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
+{
+    throw new InvalidOperationException(
+        "Jwt:Key must be at least 32 characters long."
+    );
+}
+
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -102,7 +112,6 @@ builder.Services
         options.TokenValidationParameters =
             new TokenValidationParameters
             {
-                // Validate the signature of the JWT
                 ValidateIssuerSigningKey = true,
 
                 IssuerSigningKey =
@@ -110,19 +119,51 @@ builder.Services
                         Encoding.UTF8.GetBytes(jwtKey)
                     ),
 
-                // Currently not using issuer validation
                 ValidateIssuer = false,
-
-                // Currently not using audience validation
                 ValidateAudience = false,
 
-                // Make sure expired tokens are rejected
                 ValidateLifetime = true,
+                ClockSkew = TimeSpan.Zero,
 
-                // Don't allow extra time after expiration
-                ClockSkew = TimeSpan.Zero
+                // Explicit, so [Authorize(Roles = "...")] and User.Identity.Name
+                // always read the same claim types the AuthController writes.
+                RoleClaimType = ClaimTypes.Role,
+                NameClaimType = ClaimTypes.Name
             };
+
+        // ---------- DEBUG LOGGING (check the console) ----------
+        options.Events = new JwtBearerEvents
+        {
+            OnAuthenticationFailed = context =>
+            {
+                Console.WriteLine(
+                    $"[JWT] Authentication FAILED: {context.Exception.Message}");
+                return Task.CompletedTask;
+            },
+
+            OnChallenge = context =>
+            {
+                Console.WriteLine(
+                    $"[JWT] 401 Challenge. Error='{context.Error}' " +
+                    $"Description='{context.ErrorDescription}' " +
+                    $"HasAuthHeader={context.Request.Headers.ContainsKey("Authorization")}");
+                return Task.CompletedTask;
+            },
+
+            OnForbidden = context =>
+            {
+                var roles = context.Principal?
+                    .FindAll(ClaimTypes.Role)
+                    .Select(c => c.Value) ?? Enumerable.Empty<string>();
+
+                Console.WriteLine(
+                    $"[JWT] 403 Forbidden. Token roles = [{string.Join(", ", roles)}]");
+                return Task.CompletedTask;
+            }
+        };
     });
+
+builder.Services.AddAuthorization();
 
 
 // =====================================================
@@ -150,56 +191,21 @@ var app = builder.Build();
 
 
 // =====================================================
-// DEVELOPMENT
-// =====================================================
-
-if (app.Environment.IsDevelopment())
-{
-    // OpenAPI can be enabled here later if needed.
-    // app.MapOpenApi();
-}
-
-
-// =====================================================
 // MIDDLEWARE
 // =====================================================
 
-// CORS must run before the controllers are reached.
 app.UseCors("AllowReact");
 
-// Allow files from wwwroot / static files.
 app.UseStaticFiles();
 
-
-// =====================================================
-// AUTHENTICATION & AUTHORIZATION
-// =====================================================
-
-// IMPORTANT:
 // Authentication MUST come before Authorization.
 app.UseAuthentication();
-
 app.UseAuthorization();
 
-
-// =====================================================
-// CONTROLLERS
-// =====================================================
-
 app.MapControllers();
-
-
-// =====================================================
-// API STATUS
-// =====================================================
 
 app.MapGet("/", () =>
     "CDM OneServe API is running!"
 );
-
-
-// =====================================================
-// RUN
-// =====================================================
 
 app.Run();

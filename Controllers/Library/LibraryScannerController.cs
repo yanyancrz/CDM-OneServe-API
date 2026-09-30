@@ -1,4 +1,7 @@
-﻿using CDM_OneServe_API.Services.Library;
+﻿using System.Security.Claims;
+
+using CDM_OneServe_API.Services.Library;
+
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -6,15 +9,18 @@ namespace CDM_OneServe_API.Controllers.Library;
 
 [ApiController]
 [Route("api/library/scanner")]
-[Authorize(Roles = "LibraryAdmin,LibraryStaff")]
+[Authorize(Roles = "LibraryAdmin,LibraryStaff,SuperAdmin")]
 public class LibraryScannerController : ControllerBase
 {
     private readonly LibraryScannerService _scannerService;
+    private readonly ILogger<LibraryScannerController> _logger;
 
     public LibraryScannerController(
-        LibraryScannerService scannerService)
+        LibraryScannerService scannerService,
+        ILogger<LibraryScannerController> logger)
     {
         _scannerService = scannerService;
+        _logger = logger;
     }
 
     // POST: api/library/scanner/verify
@@ -22,7 +28,8 @@ public class LibraryScannerController : ControllerBase
     public async Task<IActionResult> VerifyQr(
         [FromBody] VerifyQrRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.QrData))
+        if (request == null ||
+            string.IsNullOrWhiteSpace(request.QrData))
         {
             return BadRequest(new
             {
@@ -31,23 +38,46 @@ public class LibraryScannerController : ControllerBase
             });
         }
 
-        var result =
-            await _scannerService.VerifyQrAsync(request.QrData);
-
-        if (result == null)
+        try
         {
-            return NotFound(new
+            var scannedBy =
+                User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            _logger.LogInformation(
+                "Scanner verify called by user {UserId} ({Role})",
+                scannedBy,
+                User.FindFirstValue(ClaimTypes.Role));
+
+            var result =
+                await _scannerService.VerifyQrAsync(
+                    request.QrData.Trim());
+
+            if (result == null)
             {
-                success = false,
-                message = "Account not found."
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Account not found."
+                });
+            }
+
+            return Ok(new
+            {
+                success = true,
+                data = result
             });
         }
-
-        return Ok(new
+        catch (Exception ex)
         {
-            success = true,
-            data = result
-        });
+            _logger.LogError(ex, "Scanner verify failed.");
+
+            return StatusCode(500, new
+            {
+                success = false,
+                message = "Unable to verify QR code.",
+                error = ex.Message
+            });
+        }
     }
 }
 
