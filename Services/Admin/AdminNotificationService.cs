@@ -1,9 +1,9 @@
 ﻿using CDM_OneServe_API.Data;
-using CDM_OneServe_API.DTOs.DigitalIDAdmin;
-using CDM_OneServe_API.Models.DigitalIDAdmin;
+using CDM_OneServe_API.DTOs.Admin;
+using CDM_OneServe_API.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace CDM_OneServe_API.Services.DigitalIDAdmin;
+namespace CDM_OneServe_API.Services.Admin;
 
 public class AdminNotificationService
 {

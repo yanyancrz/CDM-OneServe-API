@@ -1,7 +1,7 @@
-﻿using CDM_OneServe_API.Services.DigitalIDAdmin;
+﻿using CDM_OneServe_API.Services.Admin;
 using Microsoft.AspNetCore.Mvc;
 
-namespace CDM_OneServe_API.Controllers.DigitalIDAdmin;
+namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/activity-log")]
@@ -9,8 +9,7 @@ public class AdminActivityController : ControllerBase
 {
     private readonly AdminActivityService _activityService;
 
-    public AdminActivityController(
-        AdminActivityService activityService)
+    public AdminActivityController(AdminActivityService activityService)
     {
         _activityService = activityService;
     }
@@ -18,8 +17,7 @@ public class AdminActivityController : ControllerBase
     [HttpGet("{email}")]
     public async Task<IActionResult> GetActivities(string email)
     {
-        var activities =
-            await _activityService.GetActivitiesAsync(email);
+        var activities = await _activityService.GetActivitiesAsync(email);
 
         return Ok(activities);
     }

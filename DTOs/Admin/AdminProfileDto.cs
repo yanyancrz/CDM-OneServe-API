@@ -1,4 +1,4 @@
-﻿namespace CDM_OneServe_API.DTOs.DigitalIDAdmin;
+﻿namespace CDM_OneServe_API.DTOs.Admin;
 
 public class AdminProfileDto
 {

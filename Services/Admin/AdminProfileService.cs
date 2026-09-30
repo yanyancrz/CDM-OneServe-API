@@ -1,8 +1,8 @@
 ﻿using CDM_OneServe_API.Data;
-using CDM_OneServe_API.DTOs.DigitalIDAdmin;
+using CDM_OneServe_API.DTOs.Admin;
 using Microsoft.EntityFrameworkCore;
 
-namespace CDM_OneServe_API.Services.DigitalIDAdmin;
+namespace CDM_OneServe_API.Services.Admin;
 
 public class AdminProfileService
 {
@@ -16,7 +16,6 @@ public class AdminProfileService
         _context = context;
         _activityService = activityService;
     }
-
 
     // ============================
     // GET ADMIN PROFILE
@@ -44,7 +43,6 @@ public class AdminProfileService
             DateJoined = user.CreatedAt
         };
     }
-
 
     // ============================
     // UPDATE ADMIN PROFILE
@@ -84,8 +82,11 @@ public class AdminProfileService
         };
     }
 
+    // ============================
+    // CHANGE ADMIN PASSWORD
+    // ============================
     public async Task<(bool Success, string Message)> ChangePasswordAsync(
-    ChangeAdminPasswordRequest request)
+        ChangeAdminPasswordRequest request)
     {
         var user = await _context.Users
             .FirstOrDefaultAsync(x => x.Email == request.Email);
@@ -117,7 +118,10 @@ public class AdminProfileService
 
         if (samePassword)
         {
-            return (false, "New password must be different from current password.");
+            return (
+                false,
+                "New password must be different from current password."
+            );
         }
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(

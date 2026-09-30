@@ -1,7 +1,6 @@
 ﻿using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
 using Microsoft.EntityFrameworkCore;
-using CDM_OneServe_API.Models.DigitalIDAdmin;
 using CDM_OneServe_API.Models.LostFound;
 
 namespace CDM_OneServe_API.Data;
@@ -14,6 +13,10 @@ public class AppDbContext : DbContext
     {
     }
 
+    // =========================
+    // USERS / AUTH
+    // =========================
+
     public DbSet<User> Users { get; set; }
 
     public DbSet<OTPVerification> OTPVerifications { get; set; }
@@ -21,6 +24,16 @@ public class AppDbContext : DbContext
     public DbSet<EmailChangeRequest> EmailChangeRequests { get; set; }
 
     public DbSet<PasswordResetOTP> PasswordResetOTPs { get; set; }
+
+    public DbSet<UserActivity> UserActivities { get; set; } = null!;
+
+    public DbSet<Notification> Notifications { get; set; } = null!;
+
+
+    // =========================
+    // EXISTING TABLES
+    // Kept for database compatibility
+    // =========================
 
     public DbSet<DigitalIdRequest> DigitalIdRequests { get; set; }
 
@@ -36,9 +49,15 @@ public class AppDbContext : DbContext
 
     public DbSet<LibraryNotification> LibraryNotifications { get; set; }
 
+
+    // =========================
+    // ADMIN
+    // =========================
+
     public DbSet<AdminActivityLog> AdminActivityLogs { get; set; }
 
     public DbSet<AdminNotificationPreference> AdminNotificationPreferences { get; set; }
+
 
     // =========================
     // LOST & FOUND
@@ -52,15 +71,58 @@ public class AppDbContext : DbContext
 
     public DbSet<LostFoundNotification> LostFoundNotifications { get; set; }
 
+
+    // =========================
+    // SCHOOL RECORDS
+    // =========================
+
+    public DbSet<StudentRecord> StudentRecords { get; set; }
+
+    public DbSet<FacultyRecord> FacultyRecords { get; set; }
+
+    public DbSet<SchoolRecordImport> SchoolRecordImports { get; set; }
+
+    public DbSet<LibraryAttendance> LibraryAttendances { get; set; }
+
+
+    // =========================
+    // ANNOUNCEMENTS
+    // =========================
+
+    public DbSet<Announcement> Announcements { get; set; } = null!;
+
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+
+        // =========================
+        // USER ACTIVITY
+        // =========================
+
+        modelBuilder.Entity<UserActivity>()
+            .ToTable("user_activities");
+
+
+        // =========================
+        // USER NOTIFICATIONS
+        // =========================
+
+        modelBuilder.Entity<Notification>()
+            .ToTable("notifications");
+
+
+        // =========================
+        // LIBRARY
+        // =========================
 
         modelBuilder.Entity<LibraryActivity>()
             .HasKey(x => x.ActivityId);
 
         modelBuilder.Entity<LibraryNotification>()
             .HasKey(x => x.NotificationId);
+
 
         // =========================
         // LOST & FOUND TABLE MAPPING
@@ -78,6 +140,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<LostFoundNotification>()
             .ToTable("lost_found_notifications");
 
+
         // =========================
         // LOST & FOUND RELATIONSHIPS
         // =========================
@@ -93,6 +156,7 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(x => x.FoundItemId)
             .OnDelete(DeleteBehavior.Cascade);
+
 
         modelBuilder.Entity<LostFoundClaim>()
             .HasOne(x => x.Item)
@@ -111,6 +175,7 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(x => x.ReviewedBy)
             .OnDelete(DeleteBehavior.SetNull);
+
 
         modelBuilder.Entity<LostFoundNotification>()
             .HasOne(x => x.User)
@@ -135,5 +200,22 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(x => x.ClaimId)
             .OnDelete(DeleteBehavior.SetNull);
+
+
+        // =========================
+        // SCHOOL RECORDS
+        // =========================
+
+        modelBuilder.Entity<StudentRecord>()
+            .ToTable("student_records");
+
+        modelBuilder.Entity<FacultyRecord>()
+            .ToTable("faculty_records");
+
+        modelBuilder.Entity<SchoolRecordImport>()
+            .ToTable("school_record_imports");
+
+        modelBuilder.Entity<LibraryAttendance>()
+            .ToTable("library_attendance");
     }
 }

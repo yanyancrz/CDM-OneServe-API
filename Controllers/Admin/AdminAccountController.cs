@@ -1,8 +1,8 @@
-﻿using CDM_OneServe_API.DTOs.DigitalIDAdmin;
-using CDM_OneServe_API.Services.DigitalIDAdmin;
+﻿using CDM_OneServe_API.DTOs.Admin;
+using CDM_OneServe_API.Services.Admin;
 using Microsoft.AspNetCore.Mvc;
 
-namespace CDM_OneServe_API.Controllers.DigitalIDAdmin;
+namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin")]
@@ -10,8 +10,7 @@ public class AdminAccountController : ControllerBase
 {
     private readonly AdminProfileService _adminProfileService;
 
-    public AdminAccountController(
-        AdminProfileService adminProfileService)
+    public AdminAccountController(AdminProfileService adminProfileService)
     {
         _adminProfileService = adminProfileService;
     }

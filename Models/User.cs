@@ -1,4 +1,8 @@
-﻿public class User
+﻿using CDM_OneServe_API.Models;
+
+namespace CDM_OneServe_API.Models;
+
+public class User
 {
     public int Id { get; set; }
 
@@ -25,10 +29,27 @@
     public DateTime CreatedAt { get; set; }
         = DateTime.Now;
 
-    public string? Role { get; set; } = "Student";
+    public string Role { get; set; } = "Student";
+
+    public string? AdminModule { get; set; }
+
     public string? Institute { get; set; }
 
     public string? StudentStatus { get; set; }
 
     public string? Position { get; set; }
+
+    // Physical ID Supporting Document
+    public string? PhysicalIdDocument { get; set; }
+
+    public string PhysicalIdVerificationStatus { get; set; }
+        = "Pending";
+
+    public DateTime? PhysicalIdVerifiedAt { get; set; }
+
+    public int? PhysicalIdReviewedBy { get; set; }
+
+    // Registration Verification Status
+    public string AccountStatus { get; set; }
+        = "Pending";
 }

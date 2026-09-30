@@ -1,8 +1,8 @@
-﻿using CDM_OneServe_API.DTOs.DigitalIDAdmin;
-using CDM_OneServe_API.Services.DigitalIDAdmin;
+﻿using CDM_OneServe_API.DTOs.Admin;
 using Microsoft.AspNetCore.Mvc;
+using CDM_OneServe_API.Services.Admin;
 
-namespace CDM_OneServe_API.Controllers.DigitalIDAdmin;
+namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/profile")]

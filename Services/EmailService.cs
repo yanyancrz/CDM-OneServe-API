@@ -9,16 +9,24 @@ public class EmailService
 {
     private readonly EmailSettings _settings;
 
-    // Path to the logo file. Drop your logo at this location in the project
-    // (e.g. wwwroot/assets/logo.png) — if it isn't found, emails simply fall
-    // back to a text wordmark so sending never breaks.
     private static readonly string LogoPath =
-        Path.Combine(AppContext.BaseDirectory, "wwwroot", "assets", "logo.png");
+        Path.Combine(
+            AppContext.BaseDirectory,
+            "wwwroot",
+            "assets",
+            "logo.png"
+        );
+
 
     public EmailService(EmailSettings settings)
     {
         _settings = settings;
     }
+
+
+    // =========================================================
+    // OTP
+    // =========================================================
 
     public Task SendOtpAsync(
         string recipientEmail,
@@ -49,11 +57,17 @@ public class EmailService
             : "If you did not request this verification code, you may safely ignore this email.";
 
         var bodyHtml = $@"
-            <h2 style='color:#1F1F1F;margin-top:0;'>{heading}</h2>
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                {heading}
+            </h2>
 
-            <p style='color:#555;line-height:1.8;'>{intro}</p>
+            <p style='color:#555;line-height:1.8;'>
+                {intro}
+            </p>
 
-            <p style='color:#555;line-height:1.8;'>{instruction}</p>
+            <p style='color:#555;line-height:1.8;'>
+                {instruction}
+            </p>
 
             <div style='
                 background:#F4D35E;
@@ -73,29 +87,147 @@ public class EmailService
                 This OTP will expire in <strong>5 minutes</strong>.
             </p>
 
-            <p style='color:#555;line-height:1.8;'>{ignoreMessage}</p>
+            <p style='color:#555;line-height:1.8;'>
+                {ignoreMessage}
+            </p>
         ";
 
         return SendTemplatedEmailAsync(
             recipientEmail,
             subject,
             "Integrated Campus Service Platform",
-            bodyHtml);
+            bodyHtml
+        );
     }
 
-    public Task SendDigitalIdRequestConfirmationAsync(
+
+    // =========================================================
+    // ADMIN — NEW PHYSICAL ID REQUEST
+    // =========================================================
+
+    public Task SendNewPhysicalIdRequestAdminAlertAsync(
+        string adminEmail,
+        string requesterName)
+    {
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                New Physical ID Verification Request
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                A new Physical ID verification request has been
+                submitted and is waiting for review.
+            </p>
+
+            <div style='
+                background:#F4D35E;
+                color:#1F1F1F;
+                padding:18px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:18px;
+            '>
+                {requesterName} submitted a Physical ID
+                for verification.
+            </div>
+
+            <p style='color:#555;line-height:1.8;'>
+                Please log in to the CDM OneServe Admin Portal
+                to review the submitted Physical ID.
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            adminEmail,
+            "CDM OneServe - New Physical ID Verification Request",
+            "Physical ID Verification",
+            bodyHtml
+        );
+    }
+
+
+    // =========================================================
+    // ADMIN — THRESHOLD
+    // =========================================================
+
+    public Task SendPhysicalIdThresholdAlertAsync(
+        string adminEmail,
+        int pendingCount,
+        int threshold)
+    {
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                Pending Physical ID Verifications
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                The number of pending Physical ID verification
+                requests has reached the configured notification
+                threshold.
+            </p>
+
+            <div style='
+                background:#F4D35E;
+                color:#1F1F1F;
+                text-align:center;
+                padding:20px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:20px;
+            '>
+                {pendingCount} Pending Verification Request(s)
+            </div>
+
+            <p style='color:#555;line-height:1.8;'>
+                Your configured threshold is
+                <strong>{threshold}</strong>
+                pending request(s).
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                There are currently
+                <strong>{pendingCount}</strong>
+                Physical ID verification request(s)
+                waiting for review.
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                Please log in to the CDM OneServe Admin Portal
+                to review the pending submissions.
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            adminEmail,
+            "CDM OneServe - Physical ID Verification Threshold Reached",
+            "Admin Notification",
+            bodyHtml
+        );
+    }
+
+
+    // =========================================================
+    // USER — PHYSICAL ID RE-UPLOAD
+    // =========================================================
+
+    public Task SendPhysicalIdReuploadRequestAsync(
         string recipientEmail,
         string fullName)
     {
         var bodyHtml = $@"
-            <h2 style='color:#1F1F1F;margin-top:0;'>Request Submitted Successfully</h2>
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                Physical ID Re-upload Required
+            </h2>
 
             <p style='color:#555;line-height:1.8;'>
                 Hello <strong>{fullName}</strong>,
             </p>
 
             <p style='color:#555;line-height:1.8;'>
-                Your Digital ID request has been successfully submitted.
+                Your submitted Physical ID could not be verified
+                and needs to be uploaded again.
             </p>
 
             <div style='
@@ -108,12 +240,12 @@ public class EmailService
                 font-weight:bold;
                 font-size:20px;
             '>
-                Status: Pending Review
+                Status: Re-upload Required
             </div>
 
             <p style='color:#555;line-height:1.8;'>
-                Our administrators will review your request and notify you once your
-                Digital ID is approved and ready for use.
+                Please log in to your CDM OneServe account and
+                upload a clear and valid copy of your Physical ID.
             </p>
 
             <p style='color:#555;line-height:1.8;'>
@@ -123,68 +255,33 @@ public class EmailService
 
         return SendTemplatedEmailAsync(
             recipientEmail,
-            "CDM OneServe - Digital ID Request Submitted",
-            "Digital ID Request",
-            bodyHtml);
+            "CDM OneServe - Physical ID Re-upload Required",
+            "Physical ID Verification",
+            bodyHtml
+        );
     }
 
-    public Task SendDigitalIdApprovedAsync(
+
+    // =========================================================
+    // USER — PHYSICAL ID REJECTED
+    // =========================================================
+
+    public Task SendPhysicalIdRejectedAsync(
         string recipientEmail,
         string fullName)
     {
         var bodyHtml = $@"
-            <h2 style='color:#1F1F1F;margin-top:0;'>Digital ID Approved</h2>
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                Physical ID Verification Rejected
+            </h2>
 
             <p style='color:#555;line-height:1.8;'>
                 Hello <strong>{fullName}</strong>,
             </p>
 
             <p style='color:#555;line-height:1.8;'>
-                Your Digital ID request has been approved successfully.
-            </p>
-
-            <div style='
-                background:#D7F0E1;
-                color:#106A2E;
-                text-align:center;
-                padding:18px;
-                border-radius:12px;
-                margin:25px 0;
-                font-weight:bold;
-                font-size:20px;
-            '>
-                Status: Approved
-            </div>
-
-            <p style='color:#555;line-height:1.8;'>
-                You may now access your Digital ID through the CDM OneServe portal.
-            </p>
-
-            <p style='color:#555;line-height:1.8;'>
-                Thank you for using CDM OneServe.
-            </p>
-        ";
-
-        return SendTemplatedEmailAsync(
-            recipientEmail,
-            "CDM OneServe - Digital ID Approved",
-            "Digital ID Request",
-            bodyHtml);
-    }
-
-    public Task SendDigitalIdRejectedAsync(
-        string recipientEmail,
-        string fullName)
-    {
-        var bodyHtml = $@"
-            <h2 style='color:#1F1F1F;margin-top:0;'>Digital ID Request Rejected</h2>
-
-            <p style='color:#555;line-height:1.8;'>
-                Hello <strong>{fullName}</strong>,
-            </p>
-
-            <p style='color:#555;line-height:1.8;'>
-                Your Digital ID request has been rejected by the administrator.
+                Your Physical ID verification request has been
+                rejected by the administrator.
             </p>
 
             <div style='
@@ -201,7 +298,8 @@ public class EmailService
             </div>
 
             <p style='color:#555;line-height:1.8;'>
-                Please review your submitted information and submit a new request.
+                Please contact the administration if you need
+                further information regarding your verification.
             </p>
 
             <p style='color:#555;line-height:1.8;'>
@@ -211,109 +309,70 @@ public class EmailService
 
         return SendTemplatedEmailAsync(
             recipientEmail,
-            "CDM OneServe - Digital ID Request Rejected",
-            "Digital ID Request",
-            bodyHtml);
-    }
-
-    // ==========================================
-    // ADMIN ALERT — NEW DIGITAL ID REQUEST
-    // ==========================================
-    public Task SendNewDigitalIdRequestAdminAlertAsync(
-        string adminEmail,
-        string requesterName)
-    {
-        var bodyHtml = $@"
-            <h2 style='color:#1F1F1F;margin-top:0;'>
-                New Digital ID Request
-            </h2>
-
-            <p style='color:#555;line-height:1.8;'>
-                A new Digital ID request has been submitted and is
-                waiting for review.
-            </p>
-
-            <div style='
-                background:#F4D35E;
-                color:#1F1F1F;
-                padding:18px;
-                border-radius:12px;
-                margin:25px 0;
-                font-weight:bold;
-                font-size:18px;
-            '>
-                {requesterName} submitted a new Digital ID request.
-            </div>
-
-            <p style='color:#555;line-height:1.8;'>
-                Please log in to the CDM OneServe Admin Portal to
-                review the request.
-            </p>
-        ";
-
-        return SendTemplatedEmailAsync(
-            adminEmail,
-            "CDM OneServe - New Digital ID Request",
-            "Admin Notification",
-            bodyHtml);
+            "CDM OneServe - Physical ID Verification Rejected",
+            "Physical ID Verification",
+            bodyHtml
+        );
     }
 
 
-    // ==========================================
-    // ADMIN ALERT — PENDING REQUEST THRESHOLD
-    // ==========================================
-    public Task SendPendingDigitalIdThresholdAlertAsync(
-        string adminEmail,
-        int pendingCount)
+    // =========================================================
+    // USER — PHYSICAL ID APPROVED
+    // =========================================================
+
+    public Task SendPhysicalIdApprovedAsync(
+        string recipientEmail,
+        string fullName)
     {
         var bodyHtml = $@"
             <h2 style='color:#1F1F1F;margin-top:0;'>
-                Pending Digital ID Requests
+                Physical ID Verification Approved
             </h2>
 
             <p style='color:#555;line-height:1.8;'>
-                The number of pending Digital ID requests has reached
-                the configured notification threshold.
+                Hello <strong>{fullName}</strong>,
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                Your Physical ID has been successfully verified
+                by the administrator.
             </p>
 
             <div style='
-                background:#F4D35E;
-                color:#1F1F1F;
+                background:#D7F0E1;
+                color:#106A2E;
                 text-align:center;
-                padding:20px;
+                padding:18px;
                 border-radius:12px;
                 margin:25px 0;
                 font-weight:bold;
                 font-size:20px;
             '>
-                {pendingCount} Pending Requests
+                Status: Approved
             </div>
 
             <p style='color:#555;line-height:1.8;'>
-                There are now <strong>{pendingCount}</strong> pending
-                Digital ID requests waiting for review.
+                Your CDM OneServe account is now approved.
             </p>
 
             <p style='color:#555;line-height:1.8;'>
-                Please log in to the CDM OneServe Admin Portal to
-                review the pending requests.
+                Thank you for using CDM OneServe.
             </p>
         ";
 
         return SendTemplatedEmailAsync(
-            adminEmail,
-            "CDM OneServe - Pending Digital ID Request Threshold",
-            "Admin Notification",
-            bodyHtml);
+            recipientEmail,
+            "CDM OneServe - Physical ID Verification Approved",
+            "Physical ID Verification",
+            bodyHtml
+        );
     }
 
 
+    // =========================================================
+    // SHARED EMAIL TEMPLATE
+    // =========================================================
 
-    /// <summary>
-    /// Builds the shared CDM OneServe email shell (header with logo, content
-    /// area, footer) around the given body HTML, and sends it. Every email
-    /// in this service routes through here so all messages share one look.
-    /// </summary>
     private async Task SendTemplatedEmailAsync(
         string recipientEmail,
         string subject,
@@ -323,10 +382,12 @@ public class EmailService
         var message = new MimeMessage();
 
         message.From.Add(
-            MailboxAddress.Parse(_settings.Email));
+            MailboxAddress.Parse(_settings.Email)
+        );
 
         message.To.Add(
-            MailboxAddress.Parse(recipientEmail));
+            MailboxAddress.Parse(recipientEmail)
+        );
 
         message.Subject = subject;
 
@@ -336,29 +397,36 @@ public class EmailService
 
         if (File.Exists(LogoPath))
         {
-            var logoImage = builder.LinkedResources.Add(LogoPath);
-            logoImage.ContentId = MimeUtils.GenerateMessageId();
+            var logoImage =
+                builder.LinkedResources.Add(LogoPath);
+
+            logoImage.ContentId =
+                MimeUtils.GenerateMessageId();
 
             logoHtml = $@"
                 <img
                     src='cid:{logoImage.ContentId}'
                     alt='CDM OneServe'
-                    style='height:48px;display:block;margin:0 auto 12px;'
+                    style='
+                        height:48px;
+                        display:block;
+                        margin:0 auto 12px;
+                    '
                 />";
         }
         else
         {
-            // No logo file found on disk — fall back to a text wordmark so
-            // the email still sends instead of throwing.
             logoHtml = "";
         }
+
 
         builder.HtmlBody = $@"
             <!DOCTYPE html>
             <html>
+
             <head>
-            <meta charset='UTF-8'>
-            <title>{subject}</title>
+                <meta charset='UTF-8'>
+                <title>{subject}</title>
             </head>
 
             <body style='
@@ -368,97 +436,132 @@ public class EmailService
                 font-family:Segoe UI, Arial, sans-serif;
             '>
 
-            <table width='100%' cellpadding='0' cellspacing='0'>
-            <tr>
-            <td align='center' style='padding:40px 20px;'>
+                <table
+                    width='100%'
+                    cellpadding='0'
+                    cellspacing='0'
+                >
+                    <tr>
 
-            <table
-                width='600'
-                cellpadding='0'
-                cellspacing='0'
-                style='
-                    background:#FFFFFF;
-                    border-radius:18px;
-                    overflow:hidden;
-                    box-shadow:0 8px 24px rgba(0,0,0,.08);
-                '
-            >
+                        <td
+                            align='center'
+                            style='padding:40px 20px;'
+                        >
 
-            <tr>
-            <td
-                align='center'
-                style='
-                    background:#106A2E;
-                    padding:32px;
-                '
-            >
-                {logoHtml}
+                            <table
+                                width='600'
+                                cellpadding='0'
+                                cellspacing='0'
+                                style='
+                                    background:#FFFFFF;
+                                    border-radius:18px;
+                                    overflow:hidden;
+                                    box-shadow:
+                                        0 8px 24px
+                                        rgba(0,0,0,.08);
+                                '
+                            >
 
-                <h1 style='
-                    color:white;
-                    margin:0;
-                    font-size:28px;
-                '>
-                    CDM OneServe
-                </h1>
+                                <!-- HEADER -->
 
-                <p style='
-                    color:#F1F1F1;
-                    margin-top:8px;
-                    margin-bottom:0;
-                '>
-                    {headerTagline}
-                </p>
+                                <tr>
 
-            </td>
-            </tr>
+                                    <td
+                                        align='center'
+                                        style='
+                                            background:#106A2E;
+                                            padding:32px;
+                                        '
+                                    >
 
-            <tr>
-            <td style='padding:40px;'>
+                                        {logoHtml}
 
-                {bodyHtml}
+                                        <h1 style='
+                                            color:white;
+                                            margin:0;
+                                            font-size:28px;
+                                        '>
+                                            CDM OneServe
+                                        </h1>
 
-            </td>
-            </tr>
+                                        <p style='
+                                            color:#F1F1F1;
+                                            margin-top:8px;
+                                            margin-bottom:0;
+                                        '>
+                                            {headerTagline}
+                                        </p>
 
-            <tr>
-            <td
-                align='center'
-                style='
-                    background:#0D7856;
-                    color:white;
-                    padding:24px;
-                    font-size:13px;
-                '
-            >
-                © 2026 CDM OneServe<br/>
-                Colegio de Montalban
-            </td>
-            </tr>
+                                    </td>
 
-            </table>
+                                </tr>
 
-            </td>
-            </tr>
-            </table>
+
+                                <!-- CONTENT -->
+
+                                <tr>
+
+                                    <td style='padding:40px;'>
+                                        {bodyHtml}
+                                    </td>
+
+                                </tr>
+
+
+                                <!-- FOOTER -->
+
+                                <tr>
+
+                                    <td
+                                        align='center'
+                                        style='
+                                            background:#0D7856;
+                                            color:white;
+                                            padding:24px;
+                                            font-size:13px;
+                                        '
+                                    >
+                                        © 2026 CDM OneServe<br/>
+                                        Colegio de Montalban
+                                    </td>
+
+                                </tr>
+
+                            </table>
+
+                        </td>
+
+                    </tr>
+
+                </table>
 
             </body>
+
             </html>";
 
-        message.Body = builder.ToMessageBody();
+
+        message.Body =
+            builder.ToMessageBody();
+
 
         using var smtp = new SmtpClient();
+
 
         await smtp.ConnectAsync(
             _settings.Host,
             _settings.Port,
-            MailKit.Security.SecureSocketOptions.StartTls);
+            MailKit.Security.SecureSocketOptions.StartTls
+        );
+
 
         await smtp.AuthenticateAsync(
             _settings.Email,
-            _settings.Password);
+            _settings.Password
+        );
+
 
         await smtp.SendAsync(message);
+
 
         await smtp.DisconnectAsync(true);
     }

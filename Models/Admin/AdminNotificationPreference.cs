@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations.Schema;
 
-namespace CDM_OneServe_API.Models.DigitalIDAdmin;
+namespace CDM_OneServe_API.Models;
 
 [Table("admin_notification_preferences")]
 public class AdminNotificationPreference

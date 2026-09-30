@@ -12,6 +12,10 @@ public class OTPVerification
 
     public string PasswordHash { get; set; } = "";
 
+    public string? PhysicalIdDocument { get; set; }
+
+    public string Role { get; set; } = "Student";
+
     public string OTPCode { get; set; } = "";
 
     public DateTime ExpiryDate { get; set; }
