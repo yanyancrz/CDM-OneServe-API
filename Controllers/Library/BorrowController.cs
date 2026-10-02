@@ -56,6 +56,23 @@ public class BorrowController : ControllerBase
     }
 
     // ============================
+    // GET: api/library/borrow/count/5
+    // Successful borrowed books ONLY
+    // ============================
+    [HttpGet("count/{userId}")]
+    public async Task<IActionResult> GetSuccessfulBorrowedCount(int userId)
+    {
+        var result =
+            await _borrowService.GetSuccessfulBorrowedCountAsync(userId);
+
+        return Ok(new
+        {
+            success = true,
+            count = result
+        });
+    }
+
+    // ============================
     // POST: api/library/borrow
     // ============================
     [HttpPost]

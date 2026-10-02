@@ -70,6 +70,21 @@ public class BorrowService
     }
 
     // ============================
+    // Successful Borrowed Count
+    // Only books successfully claimed at the library counter
+    // ForClaiming is NOT included.
+    // Returned books are NOT included.
+    // ============================
+    public async Task<int> GetSuccessfulBorrowedCountAsync(int userId)
+    {
+        return await _context.BorrowTransactions
+            .CountAsync(x =>
+                x.UserId == userId &&
+                x.Status == "Borrowed"
+            );
+    }
+
+    // ============================
     // Borrow History
     // ============================
     public async Task<List<BorrowTransactionDto>> GetBorrowHistoryAsync(int userId)

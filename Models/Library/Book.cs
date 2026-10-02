@@ -7,6 +7,9 @@ public class Book
     [Key]
     public int BookId { get; set; }
 
+    [MaxLength(50)]
+    public string? BookCode { get; set; }
+
     [Required]
     [MaxLength(20)]
     public string ISBN { get; set; } = string.Empty;
@@ -25,7 +28,24 @@ public class Book
     [MaxLength(100)]
     public string? Category { get; set; }
 
+    [MaxLength(100)]
+    public string? Institute { get; set; }
+
+    [MaxLength(50)]
+    public string? YearLevel { get; set; }
+
+    [MaxLength(50)]
+    public string? Semester { get; set; }
+
+    [MaxLength(50)]
+    public string? DDC { get; set; }
+
+    [MaxLength(100)]
+    public string? CallNo { get; set; }
+
     public string? Description { get; set; }
+
+    public string? Synopsis { get; set; }
 
     [MaxLength(50)]
     public string? Language { get; set; }

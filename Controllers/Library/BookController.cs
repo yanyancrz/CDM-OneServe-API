@@ -1,6 +1,4 @@
-﻿using CDM_OneServe_API.DTOs;
-using CDM_OneServe_API.DTOs.Library;
-using CDM_OneServe_API.Models;
+﻿using CDM_OneServe_API.DTOs.Library;
 using CDM_OneServe_API.Services.Library;
 using Microsoft.AspNetCore.Mvc;
 
@@ -17,9 +15,10 @@ public class BooksController : ControllerBase
         _bookService = bookService;
     }
 
-    // ============================
+    // =========================================================
     // GET ALL BOOKS
-    // ============================
+    // GET: api/library/books
+    // =========================================================
     [HttpGet]
     public async Task<IActionResult> GetAllBooks()
     {
@@ -32,10 +31,12 @@ public class BooksController : ControllerBase
         });
     }
 
-    // ============================
+
+    // =========================================================
     // GET BOOK BY ID
-    // ============================
-    [HttpGet("{bookId}")]
+    // GET: api/library/books/{bookId}
+    // =========================================================
+    [HttpGet("{bookId:int}")]
     public async Task<IActionResult> GetBookById(int bookId)
     {
         var book = await _bookService.GetBookByIdAsync(bookId);
@@ -56,46 +57,82 @@ public class BooksController : ControllerBase
         });
     }
 
-    // ============================
+
+    // =========================================================
     // CREATE BOOK
-    // ============================
+    // POST: api/library/books
+    // =========================================================
     [HttpPost]
-    public async Task<IActionResult> CreateBook(CreateBookDto dto)
+    public async Task<IActionResult> CreateBook(
+        [FromBody] CreateBookDto dto)
     {
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                message = "Invalid book data.",
+                errors = ModelState
+            });
+        }
+
         var result = await _bookService.CreateBookAsync(dto);
 
         if (!result.Success)
+        {
             return BadRequest(result);
+        }
 
         return Ok(result);
     }
 
-    // ============================
+
+    // =========================================================
     // UPDATE BOOK
-    // ============================
-    [HttpPut("{bookId}")]
+    // PUT: api/library/books/{bookId}
+    // =========================================================
+    [HttpPut("{bookId:int}")]
     public async Task<IActionResult> UpdateBook(
         int bookId,
-        UpdateBookDto dto)
+        [FromBody] UpdateBookDto dto)
     {
-        var result = await _bookService.UpdateBookAsync(bookId, dto);
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                message = "Invalid book data.",
+                errors = ModelState
+            });
+        }
+
+        var result = await _bookService.UpdateBookAsync(
+            bookId,
+            dto
+        );
 
         if (!result.Success)
+        {
             return BadRequest(result);
+        }
 
         return Ok(result);
     }
 
-    // ============================
+
+    // =========================================================
     // DELETE BOOK
-    // ============================
-    [HttpDelete("{bookId}")]
+    // DELETE: api/library/books/{bookId}
+    // =========================================================
+    [HttpDelete("{bookId:int}")]
     public async Task<IActionResult> DeleteBook(int bookId)
     {
         var result = await _bookService.DeleteBookAsync(bookId);
 
         if (!result.Success)
+        {
             return BadRequest(result);
+        }
 
         return Ok(result);
     }
