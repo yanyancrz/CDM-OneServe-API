@@ -3,6 +3,7 @@ using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Guidance;
 using CDM_OneServe_API.Hubs;
 using CDM_OneServe_API.Models.Guidance;
+using CDM_OneServe_API.Services.Notifications;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -16,11 +17,16 @@ public class GuidanceChatService
 {
     private readonly AppDbContext _context;
     private readonly IHubContext<GuidanceHub> _hub;
+    private readonly IPushDispatcher _push;
 
-    public GuidanceChatService(AppDbContext context, IHubContext<GuidanceHub> hub)
+    public GuidanceChatService(
+        AppDbContext context,
+        IHubContext<GuidanceHub> hub,
+        IPushDispatcher push)
     {
         _context = context;
         _hub = hub;
+        _push = push;
     }
 
     // ---------------- conversations ----------------
@@ -174,7 +180,62 @@ public class GuidanceChatService
             // Real-time must never fail the send itself.
         }
 
+        // Browser push, for when the app is closed. The chat has no in-app
+        // notification row - it is real-time only - so this is its entire
+        // offline path.
+        //
+        // PREVIEW, never the full body. A counselling conversation ends up on
+        // the lock screen of a phone somebody else may be holding, so the first
+        // 80 characters are enough to know who wrote and roughly what about.
+        //
+        // GROUPED: the dedupe key is bucketed per conversation per minute and
+        // the tray tag is the conversation, so a fast back-and-forth produces
+        // ONE entry that gets replaced instead of a stack of them. The unread
+        // badge in the nav still counts every message, so nothing is hidden.
+        try
+        {
+            var senderName = await _context.Users.AsNoTracking()
+                .Where(u => u.Id == message.SenderId)
+                .Select(u => u.FullName)
+                .FirstOrDefaultAsync(ct) ?? "New message";
+
+            // Both parties' roles are known here, so the recipient's exact
+            // thread can be linked - a student and a counselor have different
+            // chat routes, and guessing would land on a page they cannot open.
+            var threadUrl = isCounselor
+                ? $"/guidance/chat/{conversationId}"
+                : $"/guidance/counselor/chat/{conversationId}";
+
+            await _push.EnqueueAsync(new PushNotification(
+                UserId: recipientId,
+                Module: "Guidance",
+                Type: "GUIDANCE_CHAT_MESSAGE",
+                Title: senderName,
+                Body: Preview(message.Body),
+                TargetUrl: threadUrl,
+                DedupeKey: $"chat:{conversationId}:{DateTime.UtcNow:yyyyMMddHHmm}",
+                Tag: $"guidance-chat-{conversationId}",
+                Priority: 1), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The message is already saved and delivered in-app. A push failure
+            // must never turn a sent message into an error.
+        }
+
         return GuidanceResult<ChatMessageDto>.Created(ToDto(message, userId), "Message sent.");
+    }
+
+    /// <summary>
+    /// A lock-screen preview of a chat message. Deliberately short: enough to
+    /// know who wrote and the subject, without putting a counselling
+    /// conversation on a shared screen.
+    /// </summary>
+    private static string Preview(string? body, int max = 80)
+    {
+        var text = (body ?? string.Empty).Trim();
+        if (text.Length == 0) return "New message";
+        return text.Length <= max ? text : $"{text[..max].TrimEnd()}…";
     }
 
     public async Task<bool> MarkReadAsync(int userId, bool isCounselor, int conversationId, CancellationToken ct)
