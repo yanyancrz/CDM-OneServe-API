@@ -21,6 +21,34 @@ public class ProfileController : ControllerBase
         _emailService = emailService;
     }
 
+
+    // =========================================================
+    // HELPER — ADMIN ACTIVITY LOG
+    // =========================================================
+    //
+    // Para sa admin at module head lang. Hindi isinasama ang
+    // Student at Faculty para hindi mapuno ang Recent Activity
+    // ng admin dashboard.
+    //
+    // Idinadagdag lang sa context. Mase-save kasabay ng susunod
+    // na SaveChanges().
+    // =========================================================
+
+    private void LogAdmin(int userId, string? role, string action)
+    {
+        if (role == "Student" || role == "Faculty")
+            return;
+
+        _context.AdminActivityLogs.Add(
+            new AdminActivityLog
+            {
+                UserId = userId,
+                Action = action,
+                Timestamp = DateTime.Now
+            });
+    }
+
+
     // =========================================================
     // SETUP PROFILE
     // PUT: /api/profile/setup
@@ -45,155 +73,30 @@ public class ProfileController : ControllerBase
             user.IsProfileComplete;
 
         // =====================================================
-        // KEEP ROLE FROM REGISTRATION
+        // USER PROFILE INFORMATION
         // =====================================================
 
-        user.Course = request.Course;
-        user.Institute = request.Institute;
-        user.YearLevel = request.YearLevel;
-        user.ContactNumber = request.ContactNumber;
-        user.StudentStatus = request.StudentStatus;
-        user.Position = request.Position;
+        user.Course =
+            request.Course;
 
-        user.IsProfileComplete = true;
+        user.Institute =
+            request.Institute;
 
-        // =====================================================
-        // STUDENT SCHOOL RECORD
-        // =====================================================
+        user.YearLevel =
+            request.YearLevel;
 
-        if (user.Role != null &&
-            user.Role.Equals(
-                "Student",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            var studentRecord =
-                _context.StudentRecords
-                    .FirstOrDefault(x =>
-                        x.StudentIdNumber ==
-                        user.IdNumber);
+        user.ContactNumber =
+            request.ContactNumber;
 
-            if (studentRecord == null)
-            {
-                studentRecord = new StudentRecord
-                {
-                    StudentIdNumber =
-                        user.IdNumber,
+        user.StudentStatus =
+            request.StudentStatus;
 
-                    FullName =
-                        user.FullName,
+        user.Position =
+            request.Position;
 
-                    Email =
-                        user.Email,
+        user.IsProfileComplete =
+            true;
 
-                    Course =
-                        user.Course,
-
-                    YearLevel =
-                        user.YearLevel,
-
-                    EnrollmentStatus =
-                        "Enrolled",
-
-                    CreatedAt =
-                        DateTime.Now,
-
-                    UpdatedAt =
-                        DateTime.Now
-                };
-
-                _context.StudentRecords.Add(
-                    studentRecord);
-            }
-            else
-            {
-                studentRecord.FullName =
-                    user.FullName;
-
-                studentRecord.Email =
-                    user.Email;
-
-                studentRecord.Course =
-                    user.Course;
-
-                studentRecord.YearLevel =
-                    user.YearLevel;
-
-                studentRecord.EnrollmentStatus =
-                    "Enrolled";
-
-                studentRecord.UpdatedAt =
-                    DateTime.Now;
-            }
-        }
-
-        // =====================================================
-        // FACULTY SCHOOL RECORD
-        // =====================================================
-
-        else if (user.Role != null &&
-                 user.Role.Equals(
-                     "Faculty",
-                     StringComparison.OrdinalIgnoreCase))
-        {
-            var facultyRecord =
-                _context.FacultyRecords
-                    .FirstOrDefault(x =>
-                        x.FacultyIdNumber ==
-                        user.IdNumber);
-
-            if (facultyRecord == null)
-            {
-                facultyRecord = new FacultyRecord
-                {
-                    FacultyIdNumber =
-                        user.IdNumber,
-
-                    FullName =
-                        user.FullName,
-
-                    Email =
-                        user.Email,
-
-                    Institute =
-                        user.Institute,
-
-                    Position =
-                        user.Position,
-
-                    EmploymentStatus =
-                        "Active",
-
-                    CreatedAt =
-                        DateTime.Now,
-
-                    UpdatedAt =
-                        DateTime.Now
-                };
-
-                _context.FacultyRecords.Add(
-                    facultyRecord);
-            }
-            else
-            {
-                facultyRecord.FullName =
-                    user.FullName;
-
-                facultyRecord.Email =
-                    user.Email;
-
-                facultyRecord.Institute =
-                    user.Institute;
-
-                facultyRecord.Position =
-                    user.Position;
-
-                facultyRecord.EmploymentStatus =
-                    "Active";
-
-                facultyRecord.UpdatedAt =
-                    DateTime.Now;
-            }
-        }
 
         // =====================================================
         // ACTIVITY LOG
@@ -218,6 +121,7 @@ public class ProfileController : ControllerBase
                 });
         }
 
+
         // =====================================================
         // SAVE
         // =====================================================
@@ -232,6 +136,10 @@ public class ProfileController : ControllerBase
     // =========================================================
     // UPLOAD PROFILE PHOTO
     // POST: /api/profile/upload-photo
+    // =========================================================
+    //
+    // Ginagamit ng Student at Faculty profile page. Walang
+    // photo upload sa admin, kaya walang admin log dito.
     // =========================================================
 
     [HttpPost("upload-photo")]
@@ -292,6 +200,7 @@ public class ProfileController : ControllerBase
 
         user.ProfilePicture =
             $"/uploads/profile/{fileName}";
+
 
         // =====================================================
         // ACTIVITY LOG
@@ -394,12 +303,18 @@ public class ProfileController : ControllerBase
                 "User not found");
         }
 
+
         // =====================================================
         // DETECT WHAT ACTUALLY CHANGED
         // =====================================================
 
         var changedFields =
             new List<string>();
+
+
+        // =====================================================
+        // CONTACT NUMBER
+        // =====================================================
 
         if (
             user.ContactNumber !=
@@ -448,66 +363,6 @@ public class ProfileController : ControllerBase
                 changedFields.Add(
                     "faculty position");
             }
-
-            var facultyRecord =
-                _context.FacultyRecords
-                    .FirstOrDefault(x =>
-                        x.FacultyIdNumber ==
-                        user.IdNumber);
-
-            if (facultyRecord == null)
-            {
-                facultyRecord =
-                    new FacultyRecord
-                    {
-                        FacultyIdNumber =
-                            user.IdNumber,
-
-                        FullName =
-                            user.FullName,
-
-                        Email =
-                            user.Email,
-
-                        Institute =
-                            user.Institute,
-
-                        Position =
-                            user.Position,
-
-                        EmploymentStatus =
-                            "Active",
-
-                        CreatedAt =
-                            DateTime.Now,
-
-                        UpdatedAt =
-                            DateTime.Now
-                    };
-
-                _context.FacultyRecords.Add(
-                    facultyRecord);
-            }
-            else
-            {
-                facultyRecord.FullName =
-                    user.FullName;
-
-                facultyRecord.Email =
-                    user.Email;
-
-                facultyRecord.Institute =
-                    user.Institute;
-
-                facultyRecord.Position =
-                    user.Position;
-
-                facultyRecord.EmploymentStatus =
-                    "Active";
-
-                facultyRecord.UpdatedAt =
-                    DateTime.Now;
-            }
         }
 
 
@@ -532,66 +387,6 @@ public class ProfileController : ControllerBase
 
                 changedFields.Add(
                     "student status");
-            }
-
-            var studentRecord =
-                _context.StudentRecords
-                    .FirstOrDefault(x =>
-                        x.StudentIdNumber ==
-                        user.IdNumber);
-
-            if (studentRecord == null)
-            {
-                studentRecord =
-                    new StudentRecord
-                    {
-                        StudentIdNumber =
-                            user.IdNumber,
-
-                        FullName =
-                            user.FullName,
-
-                        Email =
-                            user.Email,
-
-                        Course =
-                            user.Course,
-
-                        YearLevel =
-                            user.YearLevel,
-
-                        EnrollmentStatus =
-                            "Enrolled",
-
-                        CreatedAt =
-                            DateTime.Now,
-
-                        UpdatedAt =
-                            DateTime.Now
-                    };
-
-                _context.StudentRecords.Add(
-                    studentRecord);
-            }
-            else
-            {
-                studentRecord.FullName =
-                    user.FullName;
-
-                studentRecord.Email =
-                    user.Email;
-
-                studentRecord.Course =
-                    user.Course;
-
-                studentRecord.YearLevel =
-                    user.YearLevel;
-
-                studentRecord.EnrollmentStatus =
-                    "Enrolled";
-
-                studentRecord.UpdatedAt =
-                    DateTime.Now;
             }
         }
 
@@ -660,6 +455,68 @@ public class ProfileController : ControllerBase
                 "User not found");
         }
 
+        var newEmail =
+            (request.NewEmail ?? "").Trim();
+
+        if (newEmail.Length == 0)
+        {
+            return BadRequest(
+                "New email is required");
+        }
+
+        if (
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                newEmail,
+                @"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+        )
+        {
+            return BadRequest(
+                "Enter a valid email address");
+        }
+
+        if (
+            string.Equals(
+                newEmail,
+                user.Email,
+                StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return BadRequest(
+                "That is already your current email");
+        }
+
+        // =====================================================
+        // EMAIL MUST BE UNIQUE ACROSS ALL ACCOUNTS
+        // (ToLower() instead of StringComparison: EF Core MySQL
+        //  cannot translate the StringComparison overload.)
+        // =====================================================
+
+        var newEmailLower = newEmail.ToLower();
+
+        var emailTaken = _context.Users.Any(x =>
+            x.Id != request.UserId &&
+            x.Email != null &&
+            x.Email.ToLower() == newEmailLower &&
+            x.AccountStatus != "Deleted");
+
+        if (emailTaken)
+        {
+            return BadRequest(
+                "This email is already being used by another account.");
+        }
+
+        // Another user's pending OTP for the same email.
+        var pendingTaken = _context.EmailChangeRequests.Any(x =>
+            x.UserId != request.UserId &&
+            x.NewEmail != null &&
+            x.NewEmail.ToLower() == newEmailLower);
+
+        if (pendingTaken)
+        {
+            return BadRequest(
+                "This email is already being used by another account.");
+        }
+
         var otpCode =
             Random.Shared
                 .Next(
@@ -686,7 +543,7 @@ public class ProfileController : ControllerBase
                     request.UserId,
 
                 NewEmail =
-                    request.NewEmail,
+                    newEmail,
 
                 OTPCode =
                     otpCode,
@@ -694,6 +551,7 @@ public class ProfileController : ControllerBase
                 ExpiryDate =
                     DateTime.Now.AddMinutes(5)
             });
+
 
         // =====================================================
         // ACTIVITY LOG
@@ -718,8 +576,9 @@ public class ProfileController : ControllerBase
         await _context.SaveChangesAsync();
 
         await _emailService.SendOtpAsync(
-            request.NewEmail,
-            otpCode
+            newEmail,
+            otpCode,
+            "emailchange"
         );
 
         return Ok(
@@ -771,6 +630,33 @@ public class ProfileController : ControllerBase
                 "User not found");
         }
 
+        // =====================================================
+        // RE-CHECK: the email may have been taken while the
+        // OTP was pending (e.g. someone registered with it).
+        // (ToLower() instead of StringComparison — EF Core MySQL
+        //  cannot translate the StringComparison overload.)
+        // =====================================================
+
+        var pendingEmailLower =
+            record.NewEmail.Trim().ToLower();
+
+        var emailTaken = _context.Users.Any(x =>
+            x.Id != request.UserId &&
+            x.Email != null &&
+            x.Email.ToLower() == pendingEmailLower &&
+            x.AccountStatus != "Deleted");
+
+        if (emailTaken)
+        {
+            _context.EmailChangeRequests
+                .Remove(record);
+
+            _context.SaveChanges();
+
+            return BadRequest(
+                "This email is already being used by another account.");
+        }
+
         var oldEmail =
             user.Email;
 
@@ -779,6 +665,7 @@ public class ProfileController : ControllerBase
 
         _context.EmailChangeRequests
             .Remove(record);
+
 
         // =====================================================
         // ACTIVITY LOG
@@ -799,6 +686,12 @@ public class ProfileController : ControllerBase
                 CreatedAt =
                     DateTime.Now
             });
+
+        // Admin dashboard — Recent Activity
+        LogAdmin(
+            user.Id,
+            user.Role,
+            $"{user.FullName} changed their email to {user.Email}");
 
         _context.SaveChanges();
 
@@ -908,6 +801,7 @@ public class ProfileController : ControllerBase
                 request.NewPassword
             );
 
+
         // =====================================================
         // ACTIVITY LOG
         // =====================================================
@@ -927,6 +821,12 @@ public class ProfileController : ControllerBase
                 CreatedAt =
                     DateTime.Now
             });
+
+        // Admin dashboard — Recent Activity
+        LogAdmin(
+            user.Id,
+            user.Role,
+            $"{user.FullName} changed their password");
 
         _context.SaveChanges();
 

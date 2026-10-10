@@ -28,33 +28,50 @@ public class EmailService
     // OTP
     // =========================================================
 
+    // ---------------------------------------------------------
+    // emailType:
+    //   "verification"  - new account registration   (default)
+    //   "forgotpassword"- password reset
+    //   "emailchange"   - account email change
+    // ---------------------------------------------------------
+
     public Task SendOtpAsync(
         string recipientEmail,
         string otpCode,
         string emailType = "verification")
     {
-        bool isForgotPassword =
-            emailType == "forgotpassword";
+        string subject, heading, intro, instruction, ignoreMessage;
 
-        var subject = isForgotPassword
-            ? "CDM OneServe Password Reset"
-            : "CDM OneServe OTP Verification";
+        switch (emailType)
+        {
+            case "forgotpassword":
+                subject = "CDM OneServe Password Reset";
+                heading = "Password Reset Request";
+                intro = "We received a request to reset your CDM OneServe password.";
+                instruction = "Use the OTP below to reset your password.";
+                ignoreMessage = "If you did not request a password reset, you may safely ignore this email.";
+                break;
 
-        var heading = isForgotPassword
-            ? "Password Reset Request"
-            : "Email Verification";
+            case "emailchange":
+                subject = "CDM OneServe Email Change";
+                heading = "Confirm Your New Email";
+                intro =
+                    "A request was made to change the email address on your " +
+                    "CDM OneServe account to <strong>" + recipientEmail + "</strong>.";
+                instruction = "Use the OTP below to confirm this new email address.";
+                ignoreMessage =
+                    "If you did not request this email change, you may safely ignore this email - " +
+                    "your current email address will stay unchanged.";
+                break;
 
-        var intro = isForgotPassword
-            ? "We received a request to reset your CDM OneServe password."
-            : "Thank you for registering with CDM OneServe.";
-
-        var instruction = isForgotPassword
-            ? "Use the OTP below to reset your password."
-            : "Use the OTP below to complete your account registration.";
-
-        var ignoreMessage = isForgotPassword
-            ? "If you did not request a password reset, you may safely ignore this email."
-            : "If you did not request this verification code, you may safely ignore this email.";
+            default:
+                subject = "CDM OneServe OTP Verification";
+                heading = "Email Verification";
+                intro = "Thank you for registering with CDM OneServe.";
+                instruction = "Use the OTP below to complete your account registration.";
+                ignoreMessage = "If you did not request this verification code, you may safely ignore this email.";
+                break;
+        }
 
         var bodyHtml = $@"
             <h2 style='color:#1F1F1F;margin-top:0;'>
@@ -364,6 +381,270 @@ public class EmailService
             recipientEmail,
             "CDM OneServe - Physical ID Verification Approved",
             "Physical ID Verification",
+            bodyHtml
+        );
+    }
+
+
+    // =========================================================
+    // GUIDANCE — NEW APPOINTMENT REQUEST (to the counselor)
+    // =========================================================
+
+    public Task SendCounselorAppointmentRequestAsync(
+        string recipientEmail,
+        string counselorName,
+        string studentName,
+        string date,
+        string timeSlot,
+        string concernType)
+    {
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                New Appointment Request
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                Hello <strong>{counselorName}</strong>,
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                <strong>{studentName}</strong> requested a counseling
+                appointment with you and is waiting for your confirmation.
+            </p>
+
+            <div style='
+                background:#D7F0E1;
+                color:#106A2E;
+                text-align:center;
+                padding:18px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:20px;
+            '>
+                {date} &mdash; {timeSlot}
+            </div>
+
+            <p style='color:#555;line-height:1.8;'>
+                Concern: <strong>{concernType}</strong>
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                Open your Guidance console to confirm or decline this request.
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            recipientEmail,
+            "CDM OneServe - New Appointment Request",
+            "Guidance Counseling",
+            bodyHtml
+        );
+    }
+
+
+    // =========================================================
+    // GUIDANCE — APPOINTMENT DECISION (to the student)
+    // =========================================================
+
+    public Task SendStudentAppointmentDecisionAsync(
+        string recipientEmail,
+        string studentName,
+        string counselorName,
+        string date,
+        string timeSlot,
+        string status)
+    {
+        // Confirmed, Rejected and Cancelled each get their own wording
+        // and colour, but share the same schedule card.
+        var (headline, statusText, bg, fg, verb) = status switch
+        {
+            "Confirmed" => (
+                "Appointment Confirmed", "Confirmed", "#D7F0E1", "#106A2E", "confirmed"),
+            "Rejected" => (
+                "Appointment Declined", "Declined", "#FDE8E8", "#B91C1C", "declined"),
+            _ => (
+                "Appointment Cancelled", "Cancelled", "#F1F1F1", "#555555", "cancelled")
+        };
+
+        var nextStep = status == "Confirmed"
+            ? "Please arrive on time. You can view your appointment in the Guidance module."
+            : "You can book another schedule with the same or a different counselor.";
+
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                {headline}
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                Hello <strong>{studentName}</strong>,
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                <strong>{counselorName}</strong> has {verb} your
+                appointment request.
+            </p>
+
+            <div style='
+                background:{bg};
+                color:{fg};
+                text-align:center;
+                padding:18px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:20px;
+            '>
+                Status: {statusText}
+            </div>
+
+            <div style='
+                background:#F1F1F1;
+                color:#1F1F1F;
+                text-align:center;
+                padding:18px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:20px;
+            '>
+                {date} &mdash; {timeSlot}
+            </div>
+
+            <p style='color:#555;line-height:1.8;'>
+                {nextStep}
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            recipientEmail,
+            $"CDM OneServe - {headline}",
+            "Guidance Counseling",
+            bodyHtml
+        );
+    }
+
+
+    // =========================================================
+    // GUIDANCE — FOLLOW-UP REQUEST / CANCELLED (to the student)
+    // =========================================================
+
+    public Task SendStudentFollowUpAsync(
+        string recipientEmail,
+        string studentName,
+        string counselorName,
+        string date,
+        string? time,
+        string? reason,
+        bool cancelled)
+    {
+        var (headline, bg, fg, intro) = cancelled
+            ? ("Follow-up Cancelled", "#F1F1F1", "#555555",
+                $"<strong>{counselorName}</strong> has cancelled the follow-up session that was set for you.")
+            : ("Follow-up Requested", "#D7F0E1", "#106A2E",
+                $"<strong>{counselorName}</strong> has requested a follow-up session with you.");
+
+        var when = string.IsNullOrWhiteSpace(time) ? date : $"{date} &mdash; {time}";
+
+        var reasonBlock = !cancelled && !string.IsNullOrWhiteSpace(reason)
+            ? $"<p style='color:#555;line-height:1.8;'>Reason: <strong>{reason}</strong></p>"
+            : "";
+
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                {headline}
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                Hello <strong>{studentName}</strong>,
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                {intro}
+            </p>
+
+            <div style='
+                background:{bg};
+                color:{fg};
+                text-align:center;
+                padding:18px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:20px;
+            '>
+                {when}
+            </div>
+
+            {reasonBlock}
+
+            <p style='color:#555;line-height:1.8;'>
+                {(cancelled
+                    ? "No action is needed from you."
+                    : "Open your Guidance module to accept or decline this follow-up.")}
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            recipientEmail,
+            $"CDM OneServe - {headline}",
+            "Guidance Counseling",
+            bodyHtml
+        );
+    }
+
+
+    // =========================================================
+    // GUIDANCE — FOLLOW-UP RESPONSE (to the counselor)
+    // =========================================================
+
+    public Task SendCounselorFollowUpResponseAsync(
+        string recipientEmail,
+        string counselorName,
+        string studentName,
+        string date,
+        bool accepted)
+    {
+        var (headline, statusText, bg, fg, verb) = accepted
+            ? ("Follow-up Accepted", "Accepted", "#D7F0E1", "#106A2E", "accepted")
+            : ("Follow-up Declined", "Declined", "#FDE8E8", "#B91C1C", "declined");
+
+        var bodyHtml = $@"
+            <h2 style='color:#1F1F1F;margin-top:0;'>
+                {headline}
+            </h2>
+
+            <p style='color:#555;line-height:1.8;'>
+                Hello <strong>{counselorName}</strong>,
+            </p>
+
+            <p style='color:#555;line-height:1.8;'>
+                <strong>{studentName}</strong> has {verb} the follow-up
+                session set for {date}.
+            </p>
+
+            <div style='
+                background:{bg};
+                color:{fg};
+                text-align:center;
+                padding:18px;
+                border-radius:12px;
+                margin:25px 0;
+                font-weight:bold;
+                font-size:20px;
+            '>
+                Status: {statusText}
+            </div>
+
+            <p style='color:#555;line-height:1.8;'>
+                Open your Guidance console to view the updated follow-up list.
+            </p>
+        ";
+
+        return SendTemplatedEmailAsync(
+            recipientEmail,
+            $"CDM OneServe - {headline}",
+            "Guidance Counseling",
             bodyHtml
         );
     }

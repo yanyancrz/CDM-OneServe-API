@@ -1,6 +1,6 @@
 ﻿using System.Text.Json;
 using CDM_OneServe_API.Data;
-using CDM_OneServe_API.DTOs.Library;
+using CDM_OneServe_API.DTOs.Admin.Library;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Services.Library;

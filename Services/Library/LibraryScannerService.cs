@@ -1,8 +1,10 @@
 ﻿using System.Text.Json;
 
 using CDM_OneServe_API.Data;
-using CDM_OneServe_API.DTOs.Library;
+using CDM_OneServe_API.DTOs.Admin.Library;
 using CDM_OneServe_API.Models;
+using CDM_OneServe_API.Models.Library;
+using CDM_OneServe_API.Services.Admin.Library;
 
 using Microsoft.EntityFrameworkCore;
 
@@ -121,7 +123,7 @@ public class LibraryScannerService
 
         // ==========================================
         // ACTIVE RESERVATIONS (para sa Claim button)
-        // Reserved / Pending / Approved at hindi pa expired
+        // Reserved / Pending / Approved / ReadyForPickup at hindi pa expired
         // ==========================================
 
         var now = DateTime.Now;
@@ -129,9 +131,7 @@ public class LibraryScannerService
         var reservedBooks = await _context.Reservations
             .Where(r =>
                 r.UserId == user.Id &&
-                (r.Status == "Reserved" ||
-                 r.Status == "Pending" ||
-                 r.Status == "Approved") &&
+                ReservationStatuses.Active.Contains(r.Status) &&
                 r.ExpirationDate >= now)
             .OrderBy(r => r.ExpirationDate)
             .Select(r => new ScanReservationDto
@@ -144,12 +144,43 @@ public class LibraryScannerService
                 ReservationAt = r.ReservationAt,
                 ExpirationDate = r.ExpirationDate,
                 Status = r.Status,
-                AvailableCopies = r.Book.AvailableCopies
+                AvailableCopies = r.Book.AvailableCopies,
+                HoldsCopy = r.Status == ReservationStatuses.ReadyForPickup,
+                CanClaim = r.Status != ReservationStatuses.Pending &&
+                    (r.Status == ReservationStatuses.ReadyForPickup || r.Book.AvailableCopies > 0)
             })
             .ToListAsync();
 
         Console.WriteLine(
             $"[SCANNER v3] active reservations = {reservedBooks.Count}");
+
+        // ==========================================
+        // ACTIVE LOANS (kailangang i-return)
+        // Borrowed / Overdue at wala pang ReturnDate
+        // ==========================================
+
+        var activeLoans = await (
+            from b in _context.BorrowTransactions
+            join bk in _context.Books on b.BookId equals bk.BookId
+            where b.UserId == user.Id &&
+                  b.ReturnDate == null &&
+                  (b.Status == "Borrowed" || b.Status == "Overdue")
+            orderby b.DueDate
+            select new ScanLoanDto
+            {
+                BorrowId = b.BorrowId,
+                BookId = b.BookId,
+                BookTitle = bk.Title,
+                Author = bk.Author,
+                CoverImage = bk.CoverImage,
+                BorrowDate = b.BorrowDate,
+                DueDate = b.DueDate,
+                Status = b.Status,
+                IsOverdue = b.DueDate < now
+            }).ToListAsync();
+
+        Console.WriteLine(
+            $"[SCANNER v3] active loans = {activeLoans.Count}");
 
         // ==========================================
         // ACCOUNT CHECKS
@@ -159,14 +190,14 @@ public class LibraryScannerService
         {
             return CreateResult(user, false, 0, borrowLimit,
                 "Not Verified", "Account is not verified.",
-                reservedBooks);
+                reservedBooks, activeLoans);
         }
 
         if (!user.IsProfileComplete)
         {
             return CreateResult(user, false, 0, borrowLimit,
                 "Incomplete Profile", "Account profile is incomplete.",
-                reservedBooks);
+                reservedBooks, activeLoans);
         }
 
         // The database uses "Approved"; the admin screens use "Active".
@@ -182,7 +213,7 @@ public class LibraryScannerService
             return CreateResult(user, false, 0, borrowLimit,
                 string.IsNullOrEmpty(status) ? "Unknown" : status,
                 $"Account is not active (status: {status}).",
-                reservedBooks);
+                reservedBooks, activeLoans);
         }
 
         // ==========================================
@@ -205,14 +236,14 @@ public class LibraryScannerService
                 "Borrowing Limit Reached",
                 $"Borrowing limit reached. " +
                 $"{activeBorrowedBooks}/{borrowLimit} books currently borrowed.",
-                reservedBooks);
+                reservedBooks, activeLoans);
         }
 
         return CreateResult(user, true, activeBorrowedBooks, borrowLimit,
             "Cleared",
             $"Account is cleared for borrowing. " +
             $"{remainingBooks} borrowing slot(s) remaining.",
-            reservedBooks);
+            reservedBooks, activeLoans);
     }
 
     // ==========================================
@@ -277,15 +308,8 @@ public class LibraryScannerService
         };
     }
 
-    private static int GetBorrowLimit(User user)
-    {
-        return string.Equals(
-            user.Role,
-            "Faculty",
-            StringComparison.OrdinalIgnoreCase)
-            ? 5
-            : 3;
-    }
+    // Same limits as the admin Borrow page. Part 13 moves these to LibrarySettings.
+    private static int GetBorrowLimit(User user) => LibraryDefaults.BorrowLimitFor(user.Role);
 
     private static LibraryScanResultDto CreateResult(
         User user,
@@ -294,7 +318,8 @@ public class LibraryScannerService
         int borrowLimit,
         string status,
         string message,
-        List<ScanReservationDto>? reservedBooks = null)
+        List<ScanReservationDto>? reservedBooks = null,
+        List<ScanLoanDto>? activeLoans = null)
     {
         return new LibraryScanResultDto
         {
@@ -309,7 +334,8 @@ public class LibraryScannerService
             RemainingBooks = Math.Max(0, borrowLimit - borrowedBooks),
             Status = status,
             Message = message,
-            ReservedBooks = reservedBooks ?? new()
+            ReservedBooks = reservedBooks ?? new(),
+            ActiveLoans = activeLoans ?? new()
         };
     }
 }

@@ -1,8 +1,9 @@
 ﻿using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs;
-using CDM_OneServe_API.DTOs.Library;
+using CDM_OneServe_API.DTOs.Admin.Library;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
+using CDM_OneServe_API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Services.Library;
@@ -10,10 +11,12 @@ namespace CDM_OneServe_API.Services.Library;
 public class BorrowService
 {
     private readonly AppDbContext _context;
+    private readonly IPushDispatcher _push;
 
-    public BorrowService(AppDbContext context)
+    public BorrowService(AppDbContext context, IPushDispatcher push)
     {
         _context = context;
+        _push = push;
     }
 
     // ============================
@@ -292,6 +295,15 @@ public class BorrowService
                 CreatedAt = DateTime.Now
             }
         );
+
+        await _push.EnqueueAsync(new PushNotification(
+            UserId: transaction.UserId,
+            Module: "Library",
+            Type: "borrow-claim-ready",
+            Title: "Borrow Claim Pass Ready",
+            Body: $"Your claim pass for '{book.Title}' is ready. Present it at the library counter to claim the book.",
+            TargetUrl: PushRoutes.Resolve("Library", "borrow-claim-ready"),
+            DedupeKey: $"borrowclaimready:{transaction.BookId}:{transaction.UserId}"));
 
 
         // ============================

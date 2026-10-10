@@ -1,7 +1,9 @@
-﻿using CDM_OneServe_API.Data;
+using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs;
-using CDM_OneServe_API.DTOs.Library;
+using CDM_OneServe_API.DTOs.Admin.Library;
 using CDM_OneServe_API.Models.Library;
+using CDM_OneServe_API.Services.Admin.Library;
+using CDM_OneServe_API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Services.Library;
@@ -9,11 +11,38 @@ namespace CDM_OneServe_API.Services.Library;
 public class ReservationService
 {
     private readonly AppDbContext _context;
+    private readonly IPushDispatcher _push;
 
-    public ReservationService(AppDbContext context)
+    public ReservationService(AppDbContext context, IPushDispatcher push)
     {
         _context = context;
+        _push = push;
     }
+
+    // =========================================================
+    // WEB PUSH
+    // =========================================================
+    // Library events reach the browser through the shared push outbox.
+    // The in-app LibraryNotification row is still written above each
+    // call, so nothing changes for students using the app - this only
+    // adds the closed-app case.
+    // =========================================================
+
+    private Task<bool> PushAsync(
+        int userId,
+        string type,
+        string title,
+        string message,
+        string dedupeKey) =>
+        _push.EnqueueAsync(new PushNotification(
+            UserId: userId,
+            Module: "Library",
+            Type: type,
+            Title: title,
+            Body: message,
+            TargetUrl: PushRoutes.Resolve("Library", type),
+            DedupeKey: dedupeKey,
+            Tag: "library"));
 
     // =========================================================
     // ACTIVE STATUS CHECK
@@ -52,14 +81,12 @@ public class ReservationService
         // =====================================================
         // CHECK EXISTING ACTIVE RESERVATION
         // =====================================================
+        // Includes ReadyForPickup (Part 8). Expired-by-date rows do not block.
         bool alreadyReserved = await _context.Reservations.AnyAsync(r =>
             r.UserId == userId &&
             r.BookId == bookId &&
-            (
-                r.Status == "Reserved" ||
-                r.Status == "Pending" ||
-                r.Status == "Approved"
-            ));
+            ReservationStatuses.Active.Contains(r.Status) &&
+            r.ExpirationDate >= DateTime.Now);
 
         if (alreadyReserved)
         {
@@ -99,8 +126,8 @@ public class ReservationService
 
             ReservationAt = now,
 
-            // Reservation is valid for 3 days
-            ExpirationDate = now.AddDays(3),
+            // Reservation is held for the pickup period in the Library Settings
+            ExpirationDate = now.AddDays(LibraryDefaults.ReservationPickupDays),
 
             // Immediately active. No admin approval.
             Status = "Reserved",
@@ -139,6 +166,13 @@ public class ReservationService
             IsRead = false,
             CreatedAt = now
         });
+
+        await PushAsync(
+            userId,
+            "reservation-created",
+            "Book Reserved",
+            $"Your reservation for '{book.Title}' has been created successfully.",
+            $"reservationcreated:{bookId}:{userId}");
 
         await _context.SaveChangesAsync();
 
@@ -223,8 +257,8 @@ public class ReservationService
             return response;
         }
 
-        // Only active reservations can be cancelled
-        if (!IsActiveStatus(reservation.Status))
+        // Only active reservations can be cancelled (now includes ReadyForPickup)
+        if (!ReservationStatuses.IsActive(reservation.Status))
         {
             response.Success = false;
             response.Message =
@@ -242,11 +276,35 @@ public class ReservationService
 
         // =====================================================
         // UPDATE STATUS
+        //
+        // Race-safe: only cancels if nobody changed the status first.
+        // A ReadyForPickup reservation holds a copy, so it goes back
+        // on the shelf in the same transaction.
         // =====================================================
 
-        reservation.Status = "Cancelled";
-
+        var previousStatus = reservation.Status;
         var now = DateTime.Now;
+
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+
+        var changed = await _context.Reservations
+            .Where(r => r.ReservationId == reservationId && r.Status == previousStatus)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, ReservationStatuses.Cancelled));
+
+        if (changed == 0)
+        {
+            response.Success = false;
+            response.Message = "This reservation was just updated. Please refresh and try again.";
+            return response;
+        }
+
+        if (ReservationStatuses.HoldsCopy(previousStatus))
+        {
+            await LibraryStock.ReleaseCopyAsync(_context, reservation.BookId, now);
+        }
+
+        // Keep the tracked entity in sync for the response below.
+        reservation.Status = ReservationStatuses.Cancelled;
 
         // =====================================================
         // ACTIVITY
@@ -284,7 +342,15 @@ public class ReservationService
             CreatedAt = now
         });
 
+        await PushAsync(
+            reservation.UserId,
+            "reservation-cancelled",
+            "Reservation Cancelled",
+            $"Your reservation for '{reservation.Book.Title}' has been cancelled.",
+            $"reservationcancelled:{reservation.ReservationId}");
+
         await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
 
         response.Success = true;
         response.Message = "Reservation cancelled successfully.";
@@ -438,7 +504,7 @@ public class ReservationService
         }
 
         // =====================================================
-        // MAXIMUM 3 ACTIVE BOOKS
+        // MAXIMUM ACTIVE BOOKS (from the Library Settings)
         // =====================================================
 
         int activeBorrowCount =
@@ -446,11 +512,18 @@ public class ReservationService
                 x.UserId == reservation.UserId &&
                 x.Status == "Borrowed");
 
-        if (activeBorrowCount >= 3)
+        var claimantRole = await _context.Users
+            .Where(u => u.Id == reservation.UserId)
+            .Select(u => u.Role)
+            .FirstOrDefaultAsync();
+
+        var borrowLimit = LibraryDefaults.BorrowLimitFor(claimantRole);
+
+        if (activeBorrowCount >= borrowLimit)
         {
             response.Success = false;
             response.Message =
-                "Student has reached the maximum borrowing limit.";
+                $"The patron has reached the maximum borrowing limit ({borrowLimit} books).";
 
             return response;
         }
@@ -467,7 +540,7 @@ public class ReservationService
             BookId = reservation.BookId,
 
             BorrowDate = now,
-            DueDate = now.AddDays(7),
+            DueDate = now.AddDays(LibraryDefaults.DefaultLoanDays),
 
             ReturnDate = null,
 
@@ -531,6 +604,13 @@ public class ReservationService
             IsRead = false,
             CreatedAt = now
         });
+
+        await PushAsync(
+            reservation.UserId,
+            "reservation-claimed",
+            "Book Claimed",
+            $"Your reserved book '{reservation.Book.Title}' has been claimed successfully.",
+            $"reservationclaimed:{reservation.ReservationId}");
 
         await _context.SaveChangesAsync();
 

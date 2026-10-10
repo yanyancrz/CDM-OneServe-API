@@ -58,6 +58,9 @@ public class Book
     [MaxLength(500)]
     public string? CoverImage { get; set; }
 
+    [MaxLength(500)]
+    public string? PdfFile { get; set; }
+
     [MaxLength(100)]
     public string? ShelfLocation { get; set; }
 

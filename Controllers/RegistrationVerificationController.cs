@@ -1,6 +1,7 @@
 ﻿using CDM_OneServe_API.Data;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Services;
+using CDM_OneServe_API.Services.Notifications;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,76 +13,47 @@ public class RegistrationVerificationController : ControllerBase
 {
     private readonly AppDbContext _context;
     private readonly EmailService _emailService;
+    private readonly IPushDispatcher _push;
 
     public RegistrationVerificationController(
         AppDbContext context,
-        EmailService emailService)
+        EmailService emailService,
+        IPushDispatcher push)
     {
         _context = context;
         _emailService = emailService;
+        _push = push;
     }
 
-    // =========================================================
-    // HELPER — AUTOMATIC INSTITUTE FROM COURSE
-    // =========================================================
-
-    private static string? GetInstituteFromCourse(string? course)
+    /// <summary>
+    /// Browser notification for a verification decision. The email is the
+    /// primary channel; this is the one the student sees on their phone
+    /// while the app is closed. Never allowed to fail the action.
+    /// </summary>
+    private async Task PushAsync(
+        int userId,
+        string type,
+        string title,
+        string body,
+        string dedupeKey)
     {
-        if (string.IsNullOrWhiteSpace(course))
-            return null;
-
-        var normalizedCourse = course.Trim();
-
-        return normalizedCourse switch
+        try
         {
-            // =================================================
-            // INSTITUTE OF COMPUTING STUDIES
-            // =================================================
-
-            "Bachelor of Science in Computer Engineering"
-                => "Institute of Computing Studies",
-
-            "Bachelor of Science in Information Technology"
-                => "Institute of Computing Studies",
-
-            "BS Information Technology"
-                => "Institute of Computing Studies",
-
-            "BS IT"
-                => "Institute of Computing Studies",
-
-            // =================================================
-            // INSTITUTE OF TEACHER EDUCATION
-            // =================================================
-
-            "Bachelor of Early Childhood Education"
-                => "Institute of Teacher Education",
-
-            "Bachelor of Technology and Livelihood Education Major in Information and Communication Technology"
-                => "Institute of Teacher Education",
-
-            "Bachelor of Science in Secondary Education Major in Science"
-                => "Institute of Teacher Education",
-
-            "Bachelor of Elementary Education Major in General Education"
-                => "Institute of Teacher Education",
-
-            "Teacher Certificate Program"
-                => "Institute of Teacher Education",
-
-            // =================================================
-            // INSTITUTE OF BUSINESS AND ENTREPRENEURSHIP
-            // =================================================
-
-            "Bachelor of Science in Business Administration Major in Human Resource Management"
-                => "Institute of Business and Entrepreneurship",
-
-            "Bachelor of Science in Entrepreneurship"
-                => "Institute of Business and Entrepreneurship",
-
-            _ => null
-        };
+            await _push.EnqueueAsync(new PushNotification(
+                UserId: userId,
+                Module: "Account",
+                Type: type,
+                Title: title,
+                Body: body,
+                TargetUrl: PushRoutes.Resolve("Account", type),
+                DedupeKey: dedupeKey));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Verification push failed: {ex.Message}");
+        }
     }
+
 
     // =========================================================
     // GET ALL PHYSICAL ID VERIFICATION SUBMISSIONS
@@ -120,6 +92,7 @@ public class RegistrationVerificationController : ControllerBase
 
         return Ok(registrations);
     }
+
 
     // =========================================================
     // GET PENDING PHYSICAL ID VERIFICATIONS
@@ -160,6 +133,7 @@ public class RegistrationVerificationController : ControllerBase
         return Ok(registrations);
     }
 
+
     // =========================================================
     // GET REGISTRATION / VERIFICATION BY ID
     // =========================================================
@@ -198,26 +172,31 @@ public class RegistrationVerificationController : ControllerBase
         {
             return NotFound(new
             {
-                message = "Verification record not found."
+                message =
+                    "Verification record not found."
             });
         }
 
         return Ok(user);
     }
 
+
     // =========================================================
     // APPROVE PHYSICAL ID
     // =========================================================
     //
     // IMPORTANT:
-    // This method NO LONGER creates StudentRecords or
-    // FacultyRecords.
-    //
-    // School Records are official/master records.
-    // Registration already matched the user against the
-    // existing School Record.
+    // Registration Verification is now completely independent
+    // from School Records.
     //
     // Approval only verifies the USER ACCOUNT.
+    //
+    // NO:
+    // - StudentRecord lookup
+    // - FacultyRecord lookup
+    // - StudentRecord creation
+    // - FacultyRecord creation
+    // - School Records validation
     // =========================================================
 
     [HttpPut("{id}/approve")]
@@ -232,7 +211,8 @@ public class RegistrationVerificationController : ControllerBase
         {
             return NotFound(new
             {
-                message = "User not found."
+                message =
+                    "User not found."
             });
         }
 
@@ -260,187 +240,113 @@ public class RegistrationVerificationController : ControllerBase
         }
 
         // =====================================================
-        // VERIFY THAT THE SCHOOL RECORD STILL EXISTS
-        // =====================================================
-        //
-        // We DO NOT create a new School Record here.
-        //
-        // If the corresponding official record was removed
-        // from School Records, approval must stop.
+        // VERIFY USER ACCOUNT
         // =====================================================
 
-        if (role == "student")
-        {
-            var studentRecord =
-                await _context.StudentRecords
-                    .FirstOrDefaultAsync(x =>
-                        x.StudentIdNumber == user.IdNumber);
+        user.AccountStatus =
+             "Active";
 
-            if (studentRecord == null)
+        user.PhysicalIdVerificationStatus =
+            "Verified";
+
+        user.PhysicalIdVerifiedAt =
+            DateTime.Now;
+
+        user.PhysicalIdReviewedBy =
+            adminId;
+
+
+        // =====================================================
+        // ACTIVITY LOG
+        // =====================================================
+
+        var activityLog =
+            new AdminActivityLog
             {
-                return BadRequest(new
-                {
-                    message =
-                        "No matching Student School Record was found for this account. " +
-                        "The account cannot be approved."
-                });
-            }
-        }
+                UserId =
+                    adminId,
 
-        if (role == "faculty")
+                Action =
+                    $"Approved Physical ID for {user.FullName} ({user.IdNumber})",
+
+                Timestamp =
+                    DateTime.Now
+            };
+
+        _context.AdminActivityLogs.Add(
+            activityLog);
+
+        await PushAsync(
+            user.Id,
+            "verification-approved",
+            "Account verified",
+            "Your CDM OneServe account has been verified. You now have full access.",
+            $"verified:{user.Id}");
+
+
+        // =====================================================
+        // SAVE
+        // =====================================================
+
+        await _context.SaveChangesAsync();
+
+
+        // =====================================================
+        // SEND APPROVAL EMAIL
+        // =====================================================
+
+        bool emailSent = false;
+
+        if (!string.IsNullOrWhiteSpace(
+                user.Email))
         {
-            var facultyRecord =
-                await _context.FacultyRecords
-                    .FirstOrDefaultAsync(x =>
-                        x.FacultyIdNumber == user.IdNumber);
-
-            if (facultyRecord == null)
+            try
             {
-                return BadRequest(new
-                {
-                    message =
-                        "No matching Faculty School Record was found for this account. " +
-                        "The account cannot be approved."
-                });
-            }
-        }
-
-        using var transaction =
-            await _context.Database.BeginTransactionAsync();
-
-        try
-        {
-            // =================================================
-            // VERIFY USER ACCOUNT
-            // =================================================
-
-            user.AccountStatus =
-                "Approved";
-
-            user.PhysicalIdVerificationStatus =
-                "Verified";
-
-            user.PhysicalIdVerifiedAt =
-                DateTime.Now;
-
-            user.PhysicalIdReviewedBy =
-                adminId;
-
-            // =================================================
-            // IMPORTANT
-            // =================================================
-            //
-            // DO NOT:
-            // - create StudentRecord
-            // - create FacultyRecord
-            // - modify Course
-            // - modify Institute
-            // - modify YearLevel
-            // - modify official FullName
-            //
-            // School Records remain untouched.
-            // =================================================
-
-            // =================================================
-            // ACTIVITY LOG
-            // =================================================
-
-            var activityLog =
-                new AdminActivityLog
-                {
-                    UserId =
-                        adminId,
-
-                    Action =
-                        $"Approved Physical ID for {user.FullName} ({user.IdNumber})",
-
-                    Timestamp =
-                        DateTime.Now
-                };
-
-            _context.AdminActivityLogs.Add(
-                activityLog);
-
-            // =================================================
-            // SAVE
-            // =================================================
-
-            await _context.SaveChangesAsync();
-
-            await transaction.CommitAsync();
-
-            // =================================================
-            // SEND APPROVAL EMAIL
-            // =================================================
-
-            bool emailSent = false;
-
-            if (!string.IsNullOrWhiteSpace(
-                    user.Email))
-            {
-                try
-                {
-                    await _emailService
-                        .SendPhysicalIdApprovedAsync(
-                            user.Email,
-                            user.FullName
-                        );
-
-                    emailSent = true;
-                }
-                catch (Exception emailEx)
-                {
-                    Console.WriteLine(
-                        $"Approval email failed: {emailEx.Message}"
+                await _emailService
+                    .SendPhysicalIdApprovedAsync(
+                        user.Email,
+                        user.FullName
                     );
-                }
+
+                emailSent = true;
             }
-
-            // =================================================
-            // RETURN RESPONSE
-            // =================================================
-
-            return Ok(new
+            catch (Exception emailEx)
             {
-                message =
-                    "Physical ID verified successfully. Existing School Record was preserved.",
-
-                user.Id,
-
-                user.AccountStatus,
-
-                user.PhysicalIdVerificationStatus,
-
-                user.PhysicalIdVerifiedAt,
-
-                user.PhysicalIdReviewedBy,
-
-                recordType =
-                    role == "student"
-                        ? "Student"
-                        : "Faculty",
-
-                schoolRecordPreserved = true,
-
-                emailSent
-            });
+                Console.WriteLine(
+                    $"Approval email failed: {emailEx.Message}"
+                );
+            }
         }
-        catch (Exception ex)
+
+
+        // =====================================================
+        // RETURN RESPONSE
+        // =====================================================
+
+        return Ok(new
         {
-            await transaction.RollbackAsync();
+            message =
+                "Physical ID verified successfully.",
 
-            return StatusCode(
-                500,
-                new
-                {
-                    message =
-                        "Failed to verify Physical ID.",
+            user.Id,
 
-                    error =
-                        ex.Message
-                });
-        }
+            user.AccountStatus,
+
+            user.PhysicalIdVerificationStatus,
+
+            user.PhysicalIdVerifiedAt,
+
+            user.PhysicalIdReviewedBy,
+
+            recordType =
+                role == "student"
+                    ? "Student"
+                    : "Faculty",
+
+            emailSent
+        });
     }
+
 
     // =========================================================
     // REJECT PHYSICAL ID
@@ -463,6 +369,7 @@ public class RegistrationVerificationController : ControllerBase
             });
         }
 
+
         // =====================================================
         // UPDATE STATUS
         // =====================================================
@@ -478,6 +385,7 @@ public class RegistrationVerificationController : ControllerBase
 
         user.PhysicalIdReviewedBy =
             adminId;
+
 
         // =====================================================
         // ACTIVITY LOG
@@ -499,7 +407,20 @@ public class RegistrationVerificationController : ControllerBase
         _context.AdminActivityLogs.Add(
             activityLog);
 
+        await PushAsync(
+            user.Id,
+            "verification-rejected",
+            "Account not verified",
+            "Your CDM OneServe account verification was not approved. Please submit a clearer Physical ID.",
+            $"rejected:{user.Id}");
+
+
+        // =====================================================
+        // SAVE
+        // =====================================================
+
         await _context.SaveChangesAsync();
+
 
         // =====================================================
         // SEND REJECTION EMAIL
@@ -528,6 +449,11 @@ public class RegistrationVerificationController : ControllerBase
             }
         }
 
+
+        // =====================================================
+        // RETURN RESPONSE
+        // =====================================================
+
         return Ok(new
         {
             message =
@@ -544,6 +470,7 @@ public class RegistrationVerificationController : ControllerBase
             emailSent
         });
     }
+
 
     // =========================================================
     // REQUEST PHYSICAL ID RE-UPLOAD
@@ -566,12 +493,14 @@ public class RegistrationVerificationController : ControllerBase
             });
         }
 
+
         // =====================================================
         // COUNT BEFORE STATUS CHANGE
         // =====================================================
 
         var pendingBefore =
             await GetPendingPhysicalIdCount();
+
 
         // =====================================================
         // UPDATE STATUS
@@ -588,6 +517,7 @@ public class RegistrationVerificationController : ControllerBase
 
         user.PhysicalIdReviewedBy =
             adminId;
+
 
         // =====================================================
         // ACTIVITY LOG
@@ -609,11 +539,20 @@ public class RegistrationVerificationController : ControllerBase
         _context.AdminActivityLogs.Add(
             activityLog);
 
+        await PushAsync(
+            user.Id,
+            "verification-reupload",
+            "Please re-upload your Physical ID",
+            "Your Physical ID could not be read. Please upload a clearer photo from your profile.",
+            $"reupload:{user.Id}");
+
+
         // =====================================================
         // SAVE
         // =====================================================
 
         await _context.SaveChangesAsync();
+
 
         // =====================================================
         // COUNT AFTER STATUS CHANGE
@@ -621,6 +560,7 @@ public class RegistrationVerificationController : ControllerBase
 
         var pendingAfter =
             await GetPendingPhysicalIdCount();
+
 
         // =====================================================
         // SEND RE-UPLOAD EMAIL
@@ -649,6 +589,7 @@ public class RegistrationVerificationController : ControllerBase
             }
         }
 
+
         // =====================================================
         // CHECK THRESHOLD
         // =====================================================
@@ -666,6 +607,7 @@ public class RegistrationVerificationController : ControllerBase
         {
             int threshold =
                 preference.ThresholdCount;
+
 
             // Example:
             // 9 -> 10 = EMAIL
@@ -704,6 +646,11 @@ public class RegistrationVerificationController : ControllerBase
             }
         }
 
+
+        // =====================================================
+        // RETURN RESPONSE
+        // =====================================================
+
         return Ok(new
         {
             message =
@@ -726,6 +673,7 @@ public class RegistrationVerificationController : ControllerBase
         });
     }
 
+
     // =========================================================
     // HELPER — COUNT PENDING PHYSICAL ID REQUESTS
     // =========================================================
@@ -741,6 +689,7 @@ public class RegistrationVerificationController : ControllerBase
                 x.PhysicalIdDocument != ""
             );
     }
+
 
     // =========================================================
     // TEST

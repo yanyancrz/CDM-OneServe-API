@@ -1,6 +1,6 @@
 ﻿using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs;
-using CDM_OneServe_API.DTOs.Library;
+using CDM_OneServe_API.DTOs.Admin.Library;
 using CDM_OneServe_API.Models.Library;
 using Microsoft.EntityFrameworkCore;
 
@@ -57,6 +57,8 @@ public class BookService
             PublishYear = book.PublishYear,
 
             CoverImage = book.CoverImage,
+
+            PdfFile = book.PdfFile,
 
             ShelfLocation = book.ShelfLocation,
 
@@ -131,6 +133,37 @@ public class BookService
 
 
         // -----------------------------------------------------
+        // VALIDATE COPIES
+        // -----------------------------------------------------
+        if (dto.TotalCopies < 0)
+        {
+            response.Success = false;
+            response.Message =
+                "Total copies cannot be negative.";
+
+            return response;
+        }
+
+        if (dto.AvailableCopies < 0)
+        {
+            response.Success = false;
+            response.Message =
+                "Available copies cannot be negative.";
+
+            return response;
+        }
+
+        if (dto.AvailableCopies > dto.TotalCopies)
+        {
+            response.Success = false;
+            response.Message =
+                "Available copies cannot be greater than total copies.";
+
+            return response;
+        }
+
+
+        // -----------------------------------------------------
         // CREATE BOOK
         // -----------------------------------------------------
         var book = new Book
@@ -173,7 +206,10 @@ public class BookService
 
             TotalCopies = dto.TotalCopies,
 
-            AvailableCopies = dto.TotalCopies,
+            // IMPORTANT:
+            // Gamitin ang actual AvailableCopies
+            // mula sa request/JSON.
+            AvailableCopies = dto.AvailableCopies,
 
             Status = string.IsNullOrWhiteSpace(dto.Status)
                 ? "Available"
@@ -186,7 +222,7 @@ public class BookService
 
 
         // -----------------------------------------------------
-        // SAVE
+        // SAVE TO DATABASE
         // -----------------------------------------------------
         _context.Books.Add(book);
 
@@ -225,7 +261,6 @@ public class BookService
         if (book == null)
         {
             response.Success = false;
-
             response.Message = "Book not found.";
 
             return response;
@@ -252,7 +287,41 @@ public class BookService
 
 
         // -----------------------------------------------------
-        // UPDATE BASIC INFORMATION
+        // VALIDATE COPIES
+        // -----------------------------------------------------
+        if (dto.TotalCopies < 0)
+        {
+            response.Success = false;
+
+            response.Message =
+                "Total copies cannot be negative.";
+
+            return response;
+        }
+
+        if (dto.AvailableCopies < 0)
+        {
+            response.Success = false;
+
+            response.Message =
+                "Available copies cannot be negative.";
+
+            return response;
+        }
+
+        if (dto.AvailableCopies > dto.TotalCopies)
+        {
+            response.Success = false;
+
+            response.Message =
+                "Available copies cannot be greater than total copies.";
+
+            return response;
+        }
+
+
+        // -----------------------------------------------------
+        // UPDATE BOOK INFORMATION
         // -----------------------------------------------------
         book.BookCode = dto.BookCode;
 
@@ -296,18 +365,7 @@ public class BookService
         // -----------------------------------------------------
         book.TotalCopies = dto.TotalCopies;
 
-        if (dto.AvailableCopies > dto.TotalCopies)
-        {
-            book.AvailableCopies = dto.TotalCopies;
-        }
-        else if (dto.AvailableCopies < 0)
-        {
-            book.AvailableCopies = 0;
-        }
-        else
-        {
-            book.AvailableCopies = dto.AvailableCopies;
-        }
+        book.AvailableCopies = dto.AvailableCopies;
 
 
         // -----------------------------------------------------
@@ -389,7 +447,7 @@ public class BookService
 
 
         // -----------------------------------------------------
-        // ARCHIVE INSTEAD OF PHYSICAL DELETE
+        // ARCHIVE BOOK
         // -----------------------------------------------------
         book.Status = "Archived";
 

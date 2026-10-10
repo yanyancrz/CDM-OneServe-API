@@ -1,4 +1,5 @@
-﻿using CDM_OneServe_API.Data;
+using CDM_OneServe_API.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -6,6 +7,7 @@ namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
 [Route("api/admin/dashboard")]
+[Authorize(Roles = "SuperAdmin,Admin")]
 public class AdminDashboardController : ControllerBase
 {
     private readonly AppDbContext _context;
@@ -57,31 +59,26 @@ public class AdminDashboardController : ControllerBase
 
             // -----------------------------------------
             // RECENT ACTIVITY
+            // Lahat ng ginawa ng lahat ng admin (AdminActivityLogs),
+            // pinakabago muna.
             // -----------------------------------------
-            var recentActivity = await usersQuery
-                .Where(u =>
-                    u.PhysicalIdVerificationStatus == "Verified" ||
-                    u.PhysicalIdVerificationStatus == "Rejected" ||
-                    u.PhysicalIdVerificationStatus == "Re-upload Required")
-                .OrderByDescending(u => u.PhysicalIdVerifiedAt ?? u.CreatedAt)
-                .Take(5)
-                .Select(u => new
+            var recentActivity = await (
+                from log in _context.AdminActivityLogs
+                where !log.Action.StartsWith("LIBRARY_")
+                join admin in _context.Users
+                    on log.UserId equals admin.Id into adminGroup
+                from admin in adminGroup.DefaultIfEmpty()
+                orderby log.Timestamp descending
+                select new
                 {
-                    id = u.Id,
-
-                    title =
-                        u.PhysicalIdVerificationStatus == "Verified"
-                            ? "Physical ID verified"
-                            : u.PhysicalIdVerificationStatus == "Rejected"
-                                ? "Physical ID rejected"
-                                : "Physical ID re-upload requested",
-
-                    description =
-                        $"{u.FullName} ({u.IdNumber})",
-
-                    createdAt =
-                        u.PhysicalIdVerifiedAt ?? u.CreatedAt
+                    id = log.Id,
+                    title = log.Action,
+                    description = admin != null
+                        ? "By " + admin.FullName
+                        : "By Admin",
+                    createdAt = log.Timestamp
                 })
+                .Take(20)
                 .ToListAsync();
 
             // -----------------------------------------
@@ -89,6 +86,12 @@ public class AdminDashboardController : ControllerBase
             // -----------------------------------------
             var modules = new[]
             {
+                new
+                {
+                    name = "Lost & Found",
+                    icon = "🔍",
+                    status = "Online"
+                },
                 new
                 {
                     name = "Library",
@@ -109,14 +112,8 @@ public class AdminDashboardController : ControllerBase
                 },
                 new
                 {
-                    name = "Lost & Found",
-                    icon = "🔎",
-                    status = "Online"
-                },
-                new
-                {
-                    name = "Business Hub",
-                    icon = "🏪",
+                    name = "Marketplace",
+                    icon = "🛍️",
                     status = "Online"
                 }
             };
