@@ -31,6 +31,11 @@ public class AppDbContext : DbContext
 
     public DbSet<Notification> Notifications { get; set; } = null!;
 
+    // One row per login, so the dashboard can warn "your account was signed in
+    // on another device". The JWT stays stateless - this is not an allow-list
+    // and the auth path never reads it.
+    public DbSet<UserSession> UserSessions { get; set; } = null!;
+
 
     // =========================
     // EXISTING TABLES

@@ -506,6 +506,13 @@ public class AuthController : ControllerBase
 
         // Leave a trail so "Last login / Never signed in" can be shown without
         // a new column. A failure here must never break the login itself.
+        //
+        // The session key is what lets THIS browser ask "has somebody else
+        // signed in since I did?" - see GET /api/auth/session/status. It is
+        // minted here and kept next to the token; nothing in the auth path
+        // reads it, so losing it can never lock anybody out.
+        var sessionKey = Guid.NewGuid().ToString("N");
+
         try
         {
             _context.UserActivities.Add(new UserActivity
@@ -515,6 +522,22 @@ public class AuthController : ControllerBase
                 Description = "Signed in to CDM OneServe.",
                 CreatedAt = DateTime.Now
             });
+
+            _context.UserSessions.Add(new UserSession
+            {
+                UserId = user.Id,
+                SessionKey = sessionKey,
+                DeviceLabel = DeviceLabel.FromUserAgent(Request.Headers.UserAgent.ToString()),
+                UserAgent = Request.Headers.UserAgent.ToString() is { Length: > 0 } ua
+                    ? ua[..Math.Min(ua.Length, 500)]
+                    : null,
+                IpAddress = Request.Headers["X-Forwarded-For"].ToString() is { Length: > 0 } fwd
+                    ? fwd.Split(',')[0].Trim()[..Math.Min(fwd.Split(',')[0].Trim().Length, 64)]
+                    : null,
+                CreatedAt = DateTime.Now,
+                LastSeenAt = DateTime.Now
+            });
+
             await _context.SaveChangesAsync();
         }
         catch
@@ -526,6 +549,7 @@ public class AuthController : ControllerBase
         {
             message = "Login Successful",
             token = jwtToken,
+            sessionKey,
 
             user = new
             {
