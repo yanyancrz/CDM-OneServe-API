@@ -85,6 +85,7 @@ public class AppDbContext : DbContext
 
     public DbSet<GuidanceCounselorProfile> GuidanceCounselorProfiles { get; set; } = null!;
     public DbSet<GuidanceAvailability> GuidanceAvailabilities { get; set; } = null!;
+    public DbSet<GuidanceDayOff> GuidanceDayOffs { get; set; } = null!;
     public DbSet<GuidanceAppointment> GuidanceAppointments { get; set; } = null!;
     public DbSet<GuidanceAppointmentReschedule> GuidanceAppointmentReschedules { get; set; } = null!;
     public DbSet<GuidanceCounselingRecord> GuidanceCounselingRecords { get; set; } = null!;
@@ -218,6 +219,13 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<GuidanceAvailability>(e =>
         {
             e.ToTable("guidance_availability");
+            e.HasOne(x => x.Counselor).WithMany().HasForeignKey(x => x.CounselorId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<GuidanceDayOff>(e =>
+        {
+            e.ToTable("guidance_day_offs");
+            e.HasIndex(x => new { x.CounselorId, x.Date }).IsUnique();
             e.HasOne(x => x.Counselor).WithMany().HasForeignKey(x => x.CounselorId).OnDelete(DeleteBehavior.Cascade);
         });
 

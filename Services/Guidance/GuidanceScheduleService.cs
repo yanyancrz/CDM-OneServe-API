@@ -1,4 +1,5 @@
 ﻿using CDM_OneServe_API.Data;
+using CDM_OneServe_API.Models.Guidance;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Services.Guidance;
@@ -15,12 +16,12 @@ public record GuidanceDaySlots(
 /// booking now, and by the counselor reschedule picker later, so the screen and
 /// the final server-side validation can never disagree.
 ///
-/// Occupying statuses: Pending, Confirmed, Completed hold a slot.
-/// Cancelled, Rejected, Expired free it (rows stay for history).
+/// Occupying statuses: Pending, Confirmed, Arrived, Completed hold a slot.
+/// Cancelled, Rejected, Expired, NoShow free it (rows stay for history).
 /// </summary>
 public class GuidanceScheduleService
 {
-    public static readonly string[] OccupyingStatuses = { "Pending", "Confirmed", "Completed" };
+    public static readonly string[] OccupyingStatuses = { "Pending", "Confirmed", "Arrived", "Completed" };
 
     private readonly AppDbContext _context;
     private readonly GuidanceSettingsService _settings;
@@ -49,6 +50,12 @@ public class GuidanceScheduleService
 
     public async Task<GuidanceDaySlots> GetDaySlotsAsync(int counselorId, DateOnly date, CancellationToken ct = default)
     {
+        // A day-off closes this single date no matter what the weekly blocks say.
+        var isDayOff = await _context.GuidanceDayOffs.AsNoTracking()
+            .AnyAsync(d => d.CounselorId == counselorId && d.Date == date, ct);
+        if (isDayOff)
+            return new GuidanceDaySlots(true, new(), new(), new());
+
         var dow = (int)date.DayOfWeek;   // 0 = Sunday ... 6 = Saturday
 
         var blocks = await _context.GuidanceAvailabilities

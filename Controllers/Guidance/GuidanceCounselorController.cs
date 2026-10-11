@@ -15,6 +15,7 @@ namespace CDM_OneServe_API.Controllers.Guidance;
 ///   PATCH  appointments/{id}/status          PATCH appointments/{id}/reschedule
 ///   GET    reschedule-availability?appointmentId=&amp;date=
 ///   GET/POST availability                    PATCH/DELETE availability/{id}
+///   GET/POST day-offs                         DELETE day-offs/{id}
 /// </summary>
 [ApiController]
 [Route("api/guidance/counselor")]
@@ -214,5 +215,26 @@ public class GuidanceCounselorController : ControllerBase
     {
         if (!TryGetUserId(out var id)) return Invalid();
         return Map(await _service.DeleteAvailabilityAsync(id, blockId, ct));
+    }
+
+    [HttpGet("day-offs")]
+    public async Task<IActionResult> DayOffs(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Ok(new { dayOffs = await _service.GetDayOffsAsync(id, ct) });
+    }
+
+    [HttpPost("day-offs")]
+    public async Task<IActionResult> AddDayOff([FromBody] AddDayOffRequest request, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Map(await _service.AddDayOffAsync(id, request, ct));
+    }
+
+    [HttpDelete("day-offs/{dayOffId:int}")]
+    public async Task<IActionResult> DeleteDayOff(int dayOffId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Map(await _service.DeleteDayOffAsync(id, dayOffId, ct));
     }
 }

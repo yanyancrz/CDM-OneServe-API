@@ -15,8 +15,8 @@ namespace CDM_OneServe_API.Services.Guidance;
 /// </summary>
 public class GuidanceCounselorService
 {
-    private static readonly string[] AllowedStatuses = { "Confirmed", "Cancelled", "Completed", "Rejected" };
-    private static readonly string[] FinalStatuses = { "Cancelled", "Completed", "Rejected", "Expired" };
+    private static readonly string[] AllowedStatuses = { "Confirmed", "Cancelled", "Completed", "Rejected", "Arrived", "NoShow" };
+    private static readonly string[] FinalStatuses = { "Cancelled", "Completed", "Rejected", "Expired", "NoShow" };
     private static readonly string[] Reschedulable = { "Pending", "Confirmed" };
 
     private readonly AppDbContext _context;
@@ -219,9 +219,16 @@ public class GuidanceCounselorService
             return GuidanceResult<object>.Fail(409,
                 $"This appointment is already {appt.Status.ToLowerInvariant()} and can no longer be changed.");
 
-        // A session can only be completed after it was confirmed.
-        if (status == "Completed" && appt.Status != "Confirmed" && appt.Status != "Completed")
-            return GuidanceResult<object>.Fail(409, "Only a confirmed appointment can be marked as completed.");
+        // Arrival is tracked explicitly: Confirmed -> Arrived (came) or
+        // Confirmed -> NoShow (did not come within the grace period, terminated).
+        if ((status == "Arrived" || status == "NoShow") && appt.Status != "Confirmed")
+            return GuidanceResult<object>.Fail(409,
+                $"Only a confirmed appointment can be marked as {status.ToLowerInvariant()}.");
+
+        // A session can only be completed after it was confirmed or the
+        // student arrived.
+        if (status == "Completed" && appt.Status != "Confirmed" && appt.Status != "Arrived" && appt.Status != "Completed")
+            return GuidanceResult<object>.Fail(409, "Only a confirmed or arrived appointment can be marked as completed.");
 
         var wasConfirmed = appt.Status == "Confirmed";
         var previousStatus = appt.Status;
@@ -233,7 +240,7 @@ public class GuidanceCounselorService
         await ClearRequestNotificationAsync(counselorId, appt, ct);
 
         // Tell the person who booked (student or faculty) when their request was answered.
-        if (previousStatus != status && (status == "Confirmed" || status == "Rejected" || status == "Cancelled"))
+        if (previousStatus != status && (status == "Confirmed" || status == "Rejected" || status == "Cancelled" || status == "NoShow"))
         {
             var counselorName = await _context.Users.AsNoTracking()
                 .Where(u => u.Id == counselorId).Select(u => u.FullName).FirstOrDefaultAsync(ct) ?? "Your counselor";
@@ -242,11 +249,14 @@ public class GuidanceCounselorService
             {
                 "Confirmed" => ("Appointment Confirmed", "confirmed"),
                 "Rejected" => ("Appointment Declined", "declined"),
+                "NoShow" => ("Marked as No-Show", "marked as no-show for"),
                 _ => ("Appointment Cancelled", "cancelled")
             };
 
             await NotifyAsync(appt.StudentId, "GUIDANCE_APPOINTMENT_" + status.ToUpperInvariant(), title,
-                $"{counselorName} {verb} your appointment on {D(appt.Date)} at {appt.TimeSlot}.", ct);
+                status == "NoShow"
+                    ? $"{counselorName} {verb} your appointment on {D(appt.Date)} at {appt.TimeSlot}. The session is terminated - please book a new appointment if you still need one."
+                    : $"{counselorName} {verb} your appointment on {D(appt.Date)} at {appt.TimeSlot}.", ct);
 
             // Email the student the decision too. A failure here must
             // never fail the status update.
@@ -487,6 +497,54 @@ public class GuidanceCounselorService
         _context.GuidanceAvailabilities.Remove(row);
         await _context.SaveChangesAsync(ct);
         return GuidanceResult<object>.Ok(new { }, "Schedule block removed.");
+    }
+
+    // ------------------------------------------------------------------
+    // DAY-OFFS (one-date unavailability - the weekly blocks keep repeating,
+    // so next week is automatically back to the default schedule)
+    // ------------------------------------------------------------------
+    public async Task<List<DayOffDto>> GetDayOffsAsync(int counselorId, CancellationToken ct) =>
+        await _context.GuidanceDayOffs.AsNoTracking()
+            .Where(d => d.CounselorId == counselorId && d.Date >= GuidanceClock.Today)
+            .OrderBy(d => d.Date)
+            .Select(d => new DayOffDto { Id = d.Id, Date = D(d.Date), Reason = d.Reason })
+            .ToListAsync(ct);
+
+    public async Task<GuidanceResult<DayOffDto>> AddDayOffAsync(
+        int counselorId, AddDayOffRequest req, CancellationToken ct)
+    {
+        if (!TryDate(req.Date, out var day))
+            return Fail<DayOffDto>(400, "Date must be a valid date (YYYY-MM-DD).");
+        if (day < GuidanceClock.Today)
+            return Fail<DayOffDto>(400, "Cannot mark a past date as a day off.");
+
+        var exists = await _context.GuidanceDayOffs.AnyAsync(
+            d => d.CounselorId == counselorId && d.Date == day, ct);
+        if (exists) return Fail<DayOffDto>(409, "That date is already marked as a day off.");
+
+        var row = new GuidanceDayOff
+        {
+            CounselorId = counselorId,
+            Date = day,
+            Reason = string.IsNullOrWhiteSpace(req.Reason) ? null : req.Reason.Trim()
+        };
+        _context.GuidanceDayOffs.Add(row);
+        await _context.SaveChangesAsync(ct);
+
+        return GuidanceResult<DayOffDto>.Created(
+            new DayOffDto { Id = row.Id, Date = D(row.Date), Reason = row.Reason },
+            "Day off saved. That date is now unavailable for booking.");
+    }
+
+    public async Task<GuidanceResult<object>> DeleteDayOffAsync(int counselorId, int id, CancellationToken ct)
+    {
+        var row = await _context.GuidanceDayOffs
+            .FirstOrDefaultAsync(d => d.Id == id && d.CounselorId == counselorId, ct);
+        if (row == null) return Fail<object>(404, "Day off not found.");
+
+        _context.GuidanceDayOffs.Remove(row);
+        await _context.SaveChangesAsync(ct);
+        return GuidanceResult<object>.Ok(new { }, "Day off removed. The date follows the weekly schedule again.");
     }
 
     // ------------------------------------------------------------------

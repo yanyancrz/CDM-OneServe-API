@@ -126,6 +126,9 @@ builder.Services.AddScoped<AdminGuidanceHeadService>();
 // Unanswered Pending appointment requests past their date become Expired (hourly).
 builder.Services.AddHostedService<GuidanceExpiryBackgroundService>();
 
+// Confirmed sessions starting within the hour get one "arrive on time" reminder (every 15 min).
+builder.Services.AddHostedService<GuidanceReminderBackgroundService>();
+
 
 // =====================================================
 // CAMPUSMARKET (marketplace)

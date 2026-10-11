@@ -709,7 +709,7 @@ public class AdminGuidanceHeadService
             .ToListAsync(ct);
         var counselorName = counselors.ToDictionary(c => c.Id, c => c.FullName);
 
-        var statusOrder = new[] { "Pending", "Confirmed", "Completed", "Cancelled", "Rejected", "Expired" };
+        var statusOrder = new[] { "Pending", "Confirmed", "Arrived", "NoShow", "Completed", "Cancelled", "Rejected", "Expired" };
 
         var report = new GuidanceReportsDto
         {

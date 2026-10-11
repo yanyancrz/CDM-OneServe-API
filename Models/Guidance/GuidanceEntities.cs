@@ -48,12 +48,28 @@ public class GuidanceAppointment
     public string? ConcernType { get; set; }
     public string? Notes { get; set; }
 
-    /// <summary>Pending, Confirmed, Cancelled, Completed, Rejected, Expired.</summary>
+    /// <summary>Pending, Confirmed, Arrived, NoShow, Cancelled, Completed, Rejected, Expired.</summary>
     public string Status { get; set; } = "Pending";
 
     public DateTime? CounselorNotifiedAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// One-date unavailability (a day off). The weekly availability blocks keep
+/// repeating automatically - a day-off only closes the single date, so the
+/// next week is back to the default schedule with nothing to restore.
+/// </summary>
+public class GuidanceDayOff
+{
+    public int Id { get; set; }
+    public int CounselorId { get; set; }
+    public User? Counselor { get; set; }
+
+    public DateOnly Date { get; set; }
+    public string? Reason { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 public class GuidanceAppointmentReschedule

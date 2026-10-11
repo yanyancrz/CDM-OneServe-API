@@ -36,7 +36,7 @@ public class CounselorStatsDto
 
 public class UpdateAppointmentStatusRequest
 {
-    /// <summary>Confirmed, Cancelled, Completed or Rejected.</summary>
+    /// <summary>Confirmed, Cancelled, Completed, Rejected, Arrived or NoShow.</summary>
     [Required]
     public string Status { get; set; } = "";
 }
@@ -84,4 +84,19 @@ public class UpdateAvailabilityRequest
     public bool? IsActive { get; set; }
     public string? StartTime { get; set; }
     public string? EndTime { get; set; }
+}
+
+public class DayOffDto
+{
+    public int Id { get; set; }
+    public string Date { get; set; } = "";   // YYYY-MM-DD
+    public string? Reason { get; set; }
+}
+
+public class AddDayOffRequest
+{
+    [Required] public string Date { get; set; } = "";   // YYYY-MM-DD
+
+    [StringLength(200)]
+    public string? Reason { get; set; }
 }
