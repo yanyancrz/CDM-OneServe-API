@@ -57,7 +57,7 @@ public class AssistantService
 
         var section = _config.GetSection("Assistant");
         var model = section["Model"];
-        if (string.IsNullOrWhiteSpace(model)) model = "gemini-2.5-flash";
+        if (string.IsNullOrWhiteSpace(model)) model = "gemini-3.8-flash";
 
         var apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY")
             ?? section["ApiKey"];
