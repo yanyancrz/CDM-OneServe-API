@@ -32,6 +32,29 @@ public class ClaimAdminDto
     public string VerificationNotes { get; set; } = string.Empty;
 
     public string Status { get; set; } = string.Empty;
+
+    // ---- the evidence the claimant supplied ----
+
+    public string? OwnershipExplanation { get; set; }
+
+    public string? IdentifyingDetails { get; set; }
+
+    public string? NoProofReason { get; set; }
+
+    public bool HasProof { get; set; }
+
+    public string? ProofFileName { get; set; }
+
+    public string? ProofContentType { get; set; }
+
+    /// <summary>Authorized proof endpoint - reachable only by the reviewers.</summary>
+    public string? ProofUrl { get; set; }
+
+    // ---- the reviewer's answer, if any ----
+
+    public string? DecisionReason { get; set; }
+
+    public DateTime? DecisionAt { get; set; }
 }
 
 /** The Lost & Found admin dashboard counters. */

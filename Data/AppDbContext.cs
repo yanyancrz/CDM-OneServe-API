@@ -131,6 +131,7 @@ public class AppDbContext : DbContext
 
     public DbSet<LF.LostFoundReport> LostFoundReports { get; set; } = null!;
     public DbSet<LF.ClaimRecord> ClaimRecords { get; set; } = null!;
+    public DbSet<LF.ClaimProofUpload> ClaimProofUploads { get; set; } = null!;
     public DbSet<LF.ClaimSchedule> ClaimSchedules { get; set; } = null!;
 
     // The Find-style notification model lives under the LostFound namespace to
@@ -536,6 +537,12 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.ReportId)
                 .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<LF.ClaimProofUpload>(e =>
+        {
+            e.ToTable("ClaimProofUploads");
+            e.HasIndex(x => x.StoredPath).IsUnique();
         });
 
         modelBuilder.Entity<LF.ClaimSchedule>(e =>

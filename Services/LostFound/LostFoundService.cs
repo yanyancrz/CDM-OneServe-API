@@ -36,17 +36,20 @@ public class LostFoundService
     private readonly IWebHostEnvironment _environment;
     private readonly IPushDispatcher _push;
     private readonly PushSubscriptionService _pushStore;
+    private readonly IClaimProofStorage _proof;
 
     public LostFoundService(
         AppDbContext db,
         IWebHostEnvironment environment,
         IPushDispatcher push,
-        PushSubscriptionService pushStore)
+        PushSubscriptionService pushStore,
+        IClaimProofStorage proof)
     {
         _db = db;
         _environment = environment;
         _push = push;
         _pushStore = pushStore;
+        _proof = proof;
     }
 
     // =========================================================
@@ -285,6 +288,244 @@ public class LostFoundService
     }
 
     // =========================================================
+    // CLAIM PROOF OF OWNERSHIP (optional, private)
+    // =========================================================
+
+    /// <summary>
+    /// Stages a proof file for the caller. Nothing is exposed publicly:
+    /// the file lands outside the web root and stays unreadable until
+    /// the authorized proof endpoint serves it to the claimant, the
+    /// finder or an admin.
+    ///
+    /// The content type is sniffed from the file itself - an uploaded
+    /// ".jpg" that is really a script is rejected even though the
+    /// filename says otherwise.
+    /// </summary>
+    public async Task<LostFoundResult<ClaimProofDto>> UploadClaimProofAsync(
+        int userId, IFormFile file, CancellationToken ct)
+    {
+        if (file == null || file.Length == 0)
+            return LostFoundResult<ClaimProofDto>.BadRequest("No file uploaded.");
+
+        if (file.Length > _proof.MaxBytes)
+            return LostFoundResult<ClaimProofDto>.BadRequest(
+                $"Proof must not exceed {_proof.MaxBytes / (1024 * 1024)} MB.");
+
+        // What the browser CLAIMS the file is - verified against the
+        // real bytes below before anything is stored.
+        var claimedType = file.ContentType?.ToLowerInvariant() ?? "";
+        if (!_proof.IsAllowed(claimedType))
+            return LostFoundResult<ClaimProofDto>.BadRequest(
+                "Proof must be an image (JPG, PNG or WEBP) or a PDF.");
+
+        string extension;
+        string detectedType;
+
+        await using (var buffer = new MemoryStream())
+        {
+            await file.CopyToAsync(buffer, ct);
+            buffer.Position = 0;
+
+            (detectedType, extension) = SniffContentType(buffer);
+            if (detectedType == null)
+                return LostFoundResult<ClaimProofDto>.BadRequest(
+                    "That file is not a supported image or PDF.");
+
+            // The real type must still be an allowed one.
+            if (!_proof.IsAllowed(detectedType))
+                return LostFoundResult<ClaimProofDto>.BadRequest(
+                    "That file is not a supported image or PDF.");
+
+            buffer.Position = 0;
+            var stored = await _proof.SaveAsync(userId, buffer, extension, ct);
+
+            var upload = new ClaimProofUpload
+            {
+                UploadedByUserId = userId,
+                StoredPath = stored,
+                OriginalFileName = Path.GetFileName(file.FileName ?? ""),
+                ContentType = detectedType,
+                FileSizeBytes = file.Length,
+                CreatedAt = PhNow(),
+            };
+
+            _db.ClaimProofUploads.Add(upload);
+            await _db.SaveChangesAsync(ct);
+
+            return LostFoundResult<ClaimProofDto>.Created(new ClaimProofDto
+            {
+                UploadId = upload.Id,
+                StoredPath = upload.StoredPath,
+                FileName = upload.OriginalFileName,
+                ContentType = upload.ContentType,
+                FileSizeBytes = upload.FileSizeBytes,
+            }, "Proof uploaded.");
+        }
+    }
+
+    /// <summary>
+    /// Reads a claim's proof for an authorized reader: the claimant, the
+    /// finder, the Lost &amp; Found admin, or OneServe admin. Anyone else
+    /// gets a 403 and the bytes are never sent.
+    /// </summary>
+    public async Task<LostFoundResult<ClaimProofFile>> GetClaimProofAsync(
+        int userId, int claimId, bool canAdminister, CancellationToken ct)
+    {
+        var claim = await _db.ClaimRecords.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.ClaimId == claimId, ct);
+
+        if (claim == null)
+            return LostFoundResult<ClaimProofFile>.NotFound("Claim not found.");
+
+        if (string.IsNullOrEmpty(claim.ProofAttachmentPath))
+            return LostFoundResult<ClaimProofFile>.NotFound(
+                "No proof of ownership was attached to this claim.");
+
+        var report = await _db.LostFoundReports.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.ReportId == claim.ReportId, ct);
+
+        var isClaimant = claim.ClaimedByUserId == userId;
+        var isFinder = report?.UserId == userId;
+
+        // Must own the claim, own the item, or administer the module.
+        if (!isClaimant && !isFinder && !canAdminister)
+            return LostFoundResult<ClaimProofFile>.Forbidden("You may not view this file.");
+
+        var file = await _proof.OpenAsync(claim.ProofAttachmentPath, ct);
+        if (file == null)
+            return LostFoundResult<ClaimProofFile>.NotFound("That file is no longer available.");
+
+        // Serve it under the stored name with the sniffed type: the
+        // claimant's original file name is only for display in the UI.
+        return LostFoundResult<ClaimProofFile>.Ok(
+            new ClaimProofFile(file.Content, claim.ProofContentType ?? file.ContentType,
+                claim.ProofFileName ?? file.FileName));
+    }
+
+    /// <summary>
+    /// The claimant updates a claim that the admin sent back for more
+    /// information. Re-uploads a new proof, and keeps the claim in review.
+    /// </summary>
+    public async Task<LostFoundResult<MyClaimDto>> UpdateMyClaimAsync(
+        int userId, int claimId, CreateClaimDto dto, CancellationToken ct = default)
+    {
+        var claim = await _db.ClaimRecords
+            .Include(c => c.Report)
+            .FirstOrDefaultAsync(c => c.ClaimId == claimId, ct);
+
+        if (claim == null)
+            return LostFoundResult<MyClaimDto>.NotFound("Claim not found.");
+
+        if (claim.ClaimedByUserId != userId)
+            return LostFoundResult<MyClaimDto>.Forbidden("You may only edit your own claim.");
+
+        if (claim.Status != "Processing" && claim.Status != "InformationRequested")
+            return LostFoundResult<MyClaimDto>.BadRequest(
+                "This claim can no longer be changed. Ask at the office if something is wrong.");
+
+        var explanation = dto.OwnershipExplanation?.Trim();
+        if (string.IsNullOrWhiteSpace(explanation))
+            return LostFoundResult<MyClaimDto>.BadRequest(
+                "Please explain why you believe this item is yours.");
+
+        string? proofPath = null;
+        string? proofName = null;
+        string? proofType = null;
+        long proofSize = 0;
+
+        if (!string.IsNullOrWhiteSpace(dto.ProofAttachmentPath))
+        {
+            proofPath = dto.ProofAttachmentPath.Trim();
+            var uploaded = await _db.ClaimProofUploads
+                .FirstOrDefaultAsync(u => u.StoredPath == proofPath && u.UploadedByUserId == userId, ct);
+            if (uploaded == null || uploaded.ClaimId.HasValue)
+                return LostFoundResult<MyClaimDto>.BadRequest(
+                    "That proof file is not yours or is no longer valid. Please upload it again.");
+
+            proofName = uploaded.OriginalFileName;
+            proofType = uploaded.ContentType;
+            proofSize = uploaded.FileSizeBytes;
+            uploaded.ClaimId = null;
+        }
+
+        var details = dto.IdentifyingDetails?.Trim();
+        var noProofReason = dto.NoProofReason?.Trim();
+
+        if (proofPath == null)
+        {
+            if (string.IsNullOrWhiteSpace(noProofReason))
+                return LostFoundResult<MyClaimDto>.BadRequest(
+                    "Tick \"I cannot provide proof\" and explain why, or attach a proof of ownership.");
+
+            if (string.IsNullOrWhiteSpace(details))
+                return LostFoundResult<MyClaimDto>.BadRequest(
+                    "Describe the identifying details of your item (marks, contents, serial number) so it can be verified.");
+        }
+
+        var oldPath = claim.ProofAttachmentPath;
+
+        claim.VerificationNotes = explanation;
+        claim.OwnershipExplanation = explanation;
+        claim.IdentifyingDetails = details;
+        claim.NoProofReason = proofPath == null ? noProofReason : null;
+        claim.ProofAttachmentPath = proofPath;
+        claim.ProofFileName = proofName;
+        claim.ProofContentType = proofType;
+        claim.ProofFileSize = proofSize;
+        // Answering an information request puts it back in review.
+        claim.Status = "Processing";
+        claim.DecisionReason = null;
+        claim.DecisionAt = null;
+        claim.DecisionByUserId = null;
+
+        if (proofPath != null)
+        {
+            var upload = await _db.ClaimProofUploads.FirstAsync(u => u.StoredPath == proofPath, ct);
+            upload.ClaimId = claim.ClaimId;
+        }
+
+        await _db.SaveChangesAsync(ct);
+
+        if (!string.IsNullOrEmpty(oldPath) && oldPath != proofPath)
+            await _proof.DeleteAsync(oldPath, ct);
+
+        var mine = await GetClaimForReportAsync(userId, claim.ReportId);
+        return LostFoundResult<MyClaimDto>.Ok(mine.Data!, "Claim updated.");
+    }
+
+    /// <summary>
+    /// Reads the claimed bytes to identify what a file really is. The
+    /// name is irrelevant - only the magic bytes decide, and anything
+    /// that is not a JPG, PNG, WEBP or PDF is rejected.
+    /// </summary>
+    private static (string? Type, string Extension) SniffContentType(Stream stream)
+    {
+        var header = new byte[16];
+        var read = stream.Read(header, 0, header.Length);
+        if (read < 4) return (null, "");
+
+        // JPEG
+        if (header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF)
+            return ("image/jpeg", ".jpg");
+
+        // PNG
+        if (header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47)
+            return ("image/png", ".png");
+
+        // WEBP: "RIFF"...."WEBP"
+        if (read >= 12 &&
+            header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46 &&
+            header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50)
+            return ("image/webp", ".webp");
+
+        // PDF
+        if (header[0] == 0x25 && header[1] == 0x50 && header[2] == 0x44 && header[3] == 0x46)
+            return ("application/pdf", ".pdf");
+
+        return (null, "");
+    }
+
+    // =========================================================
     // CLAIMS
     // =========================================================
 
@@ -306,6 +547,17 @@ public class LostFoundService
                 ClaimDate = c.ClaimDate,
                 Status = c.Status,
                 VerificationNotes = c.VerificationNotes,
+                OwnershipExplanation = c.OwnershipExplanation,
+                IdentifyingDetails = c.IdentifyingDetails,
+                NoProofReason = c.NoProofReason,
+                HasProof = !string.IsNullOrEmpty(c.ProofAttachmentPath),
+                ProofFileName = c.ProofFileName,
+                ProofContentType = c.ProofContentType,
+                ProofUrl = string.IsNullOrEmpty(c.ProofAttachmentPath)
+                    ? null
+                    : $"/api/lostfound/claims/{c.ClaimId}/proof",
+                DecisionReason = c.DecisionReason,
+                DecisionAt = c.DecisionAt,
             })
             .ToListAsync();
 
@@ -328,6 +580,17 @@ public class LostFoundService
                 ClaimDate = c.ClaimDate,
                 Status = c.Status,
                 VerificationNotes = c.VerificationNotes,
+                OwnershipExplanation = c.OwnershipExplanation,
+                IdentifyingDetails = c.IdentifyingDetails,
+                NoProofReason = c.NoProofReason,
+                HasProof = !string.IsNullOrEmpty(c.ProofAttachmentPath),
+                ProofFileName = c.ProofFileName,
+                ProofContentType = c.ProofContentType,
+                ProofUrl = string.IsNullOrEmpty(c.ProofAttachmentPath)
+                    ? null
+                    : $"/api/lostfound/claims/{c.ClaimId}/proof",
+                DecisionReason = c.DecisionReason,
+                DecisionAt = c.DecisionAt,
             })
             .FirstOrDefaultAsync();
 
@@ -351,6 +614,14 @@ public class LostFoundService
         return LostFoundResult<List<ClaimAdminDto>>.Ok(claims);
     }
 
+    /// <summary>
+    /// Submit a claim on a found item.
+    ///
+    /// Only the explanation and, when NO proof file is attached, the
+    /// no-proof reason and the identifying details are required. A claim
+    /// is never auto-rejected for a missing attachment - the finder (or
+    /// the admin) decides with the evidence in front of them.
+    /// </summary>
     public async Task<LostFoundResult<MyClaimDto>> SubmitClaimAsync(int userId, CreateClaimDto dto)
     {
         if (dto.ReportId <= 0)
@@ -372,42 +643,128 @@ public class LostFoundService
         var hasActiveClaim = await _db.ClaimRecords.AnyAsync(c =>
             c.ReportId == dto.ReportId &&
             c.ClaimedByUserId == userId &&
-            (c.Status == "Processing" || c.Status == "Awaiting Pickup" || c.Status == "Scheduled"));
+            (c.Status == "Processing" || c.Status == "InformationRequested" ||
+             c.Status == "Awaiting Pickup" || c.Status == "Scheduled"));
 
         if (hasActiveClaim)
-            return LostFoundResult<MyClaimDto>.BadRequest("You already have an active claim for this item.");
+            return LostFoundResult<MyClaimDto>.BadRequest(
+                "You already have an open claim on this item.");
+
+        // ---- validate the claim's evidence ----
+        var explanation = dto.OwnershipExplanation?.Trim();
+        var details = dto.IdentifyingDetails?.Trim();
+        var noProofReason = dto.NoProofReason?.Trim();
+
+        if (string.IsNullOrWhiteSpace(explanation))
+            return LostFoundResult<MyClaimDto>.BadRequest(
+                "Please explain why you believe this item is yours.");
+
+        // The upload endpoint owns file validation; here we only re-check
+        // that a path, if any, is one this module issued for this caller
+        // and has not already been spent.
+        string? proofPath = null;
+        string? proofName = null;
+        string? proofType = null;
+        long proofSize = 0;
+
+        if (!string.IsNullOrWhiteSpace(dto.ProofAttachmentPath))
+        {
+            proofPath = dto.ProofAttachmentPath.Trim();
+            var uploaded = await _db.ClaimProofUploads
+                .FirstOrDefaultAsync(u => u.StoredPath == proofPath && u.UploadedByUserId == userId);
+
+            if (uploaded == null || uploaded.ClaimId.HasValue)
+                return LostFoundResult<MyClaimDto>.BadRequest(
+                    "That proof file is not yours or is no longer valid. Please upload it again.");
+
+            proofName = uploaded.OriginalFileName;
+            proofType = uploaded.ContentType;
+            proofSize = uploaded.FileSizeBytes;
+            uploaded.ClaimId = null;   // linked to the new claim below
+        }
+        else
+        {
+            // No attachment: the claimant must say why and give the
+            // details that verify ownership. Never auto-rejected.
+            if (string.IsNullOrWhiteSpace(noProofReason))
+                return LostFoundResult<MyClaimDto>.BadRequest(
+                    "Tick \"I cannot provide proof\" and explain why, or attach a proof of ownership.");
+
+            if (string.IsNullOrWhiteSpace(details))
+                return LostFoundResult<MyClaimDto>.BadRequest(
+                    "Describe the identifying details of your item (marks, contents, serial number) so it can be verified.");
+        }
+
+        await using var tx = await _db.Database.BeginTransactionAsync();
 
         var claim = new ClaimRecord
         {
             ReportId = report.ReportId,
             ClaimedByUserId = userId,
-            VerificationNotes = dto.VerificationNotes?.Trim() ?? string.Empty,
+            VerificationNotes = explanation!,
+            OwnershipExplanation = explanation,
+            IdentifyingDetails = details,
+            NoProofReason = proofPath == null ? noProofReason : null,
+            ProofAttachmentPath = proofPath,
+            ProofFileName = proofName,
+            ProofContentType = proofType,
+            ProofFileSize = proofSize,
             ClaimDate = PhNow(),
             Status = "Processing",
         };
 
         _db.ClaimRecords.Add(claim);
+        await _db.SaveChangesAsync();
 
+        if (proofPath != null)
+        {
+            var upload = await _db.ClaimProofUploads.FirstAsync(u => u.StoredPath == proofPath);
+            upload.ClaimId = claim.ClaimId;
+            await _db.SaveChangesAsync();
+        }
+
+        // The finder is told a claim arrived; the claimant gets a
+        // confirmation of their own. Both links open the report.
         _db.LostFoundNotifications.Add(new Notification
         {
             UserId = report.UserId,
             ReportId = report.ReportId,
             Title = "New Claim",
-            Message = $"A student submitted a claim for your found item: {report.ItemName}.",
+            Message = $"A student submitted a claim for your found item #{report.ReportId}. Review it in the Lost & Found console.",
             NotificationType = "ClaimSubmitted",
             IsRead = false,
             CreatedAt = PhNow(),
         });
 
+        _db.LostFoundNotifications.Add(new Notification
+        {
+            UserId = userId,
+            ReportId = report.ReportId,
+            Title = "Claim Submitted",
+            Message = $"Your claim for #{report.ReportId} is with the reviewer. You will be notified once it is decided.",
+            NotificationType = "ClaimUpdate",
+            IsRead = false,
+            CreatedAt = PhNow(),
+        });
+
+        await _db.SaveChangesAsync();
+        await tx.CommitAsync();
+
         await PushAsync(
             report.UserId,
             "ClaimSubmitted",
             "New Claim",
-            $"A student submitted a claim for your found item: {report.ItemName}.",
+            $"A student submitted a claim for your found item #{report.ReportId}. Review it in the Lost & Found console.",
             report.ReportId,
-            $"claimsubmitted:{report.ReportId}");
+            $"claimsubmitted:{report.ReportId}:{claim.ClaimId}");
 
-        await _db.SaveChangesAsync();
+        await PushAsync(
+            userId,
+            "ClaimUpdate",
+            "Claim Submitted",
+            $"Your claim for #{report.ReportId} is with the reviewer.",
+            report.ReportId,
+            $"claimupdate-own-submitted:{claim.ClaimId}");
 
         var mine = await GetClaimForReportAsync(userId, report.ReportId);
         return LostFoundResult<MyClaimDto>.Created(mine.Data!, "Claim submitted successfully.");
@@ -421,15 +778,28 @@ public class LostFoundService
     /// schedules and - for a lost report - rejects the recovery and returns
     /// the report to the board.
     /// </summary>
-    public async Task<LostFoundResult> UpdateClaimStatusAsync(int actorUserId, int id, string status)
+    public async Task<LostFoundResult> UpdateClaimStatusAsync(
+        int actorUserId, int id, string status, string? reason = null)
     {
         var requested = status?.Trim() ?? "";
+        var trimmedReason = reason?.Trim();
 
         // "Claimed" is accepted for older clients and means the same thing.
         var approve = IsStatus(requested, "Awaiting Pickup") || IsStatus(requested, "Claimed");
+        var requestInfo = IsStatus(requested, "InformationRequested");
 
-        if (!approve && !IsStatus(requested, "Rejected"))
-            return LostFoundResult.BadRequest("Invalid status. Use Awaiting Pickup or Rejected.");
+        if (!approve && !requestInfo && !IsStatus(requested, "Rejected"))
+            return LostFoundResult.BadRequest(
+                "Invalid status. Use Awaiting Pickup, Rejected or InformationRequested.");
+
+        // The reviewer must always give a reason to reject or to ask for
+        // more information - an unexplained rejection leaves the claimant
+        // with nothing to act on.
+        if ((IsStatus(requested, "Rejected") || requestInfo) && string.IsNullOrWhiteSpace(trimmedReason))
+            return LostFoundResult.BadRequest(
+                requestInfo
+                    ? "Tell the claimant what you need from them."
+                    : "Give a reason so the claimant knows why the claim was rejected.");
 
         var claim = await _db.ClaimRecords
             .Include(c => c.Report)
@@ -456,6 +826,9 @@ public class LostFoundService
                 return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
             claim.Status = "Awaiting Pickup";
+            claim.DecisionReason = trimmedReason;
+            claim.DecisionAt = PhNow();
+            claim.DecisionByUserId = actorUserId;
 
             var hasSchedule = await _db.ClaimSchedules
                 .AnyAsync(s => s.ClaimId == claim.ClaimId && s.Status != "Cancelled");
@@ -499,8 +872,20 @@ public class LostFoundService
             return LostFoundResult.Ok("Claim approved and queued for pickup.");
         }
 
+        if (requestInfo)
+        {
+            if (!IsStatus(claim.Status, "Processing"))
+                return LostFoundResult.BadRequest(
+                    "Only claims under review can be sent back for more information.");
+
+            return await RequestClaimInfoAsync(claim, report, actorUserId, trimmedReason!);
+        }
+
         // ---- Rejected ----
         claim.Status = "Rejected";
+        claim.DecisionReason = trimmedReason;
+        claim.DecisionAt = PhNow();
+        claim.DecisionByUserId = actorUserId;
 
         if (IsStatus(report.ReportType, "Lost"))
         {
@@ -528,7 +913,7 @@ public class LostFoundService
             UserId = claim.ClaimedByUserId,
             ReportId = claim.ReportId,
             Title = "Claim Rejected",
-            Message = $"Your claim for {report.ItemName} has been rejected.",
+            Message = $"Your claim for #{report.ReportId} has been rejected.{ReasonSuffix(trimmedReason)}",
             NotificationType = "ClaimRejected",
             IsRead = false,
             CreatedAt = PhNow(),
@@ -538,13 +923,62 @@ public class LostFoundService
             claim.ClaimedByUserId,
             "ClaimRejected",
             "Claim Rejected",
-            $"Your claim for {report.ItemName} has been rejected.",
+            $"Your claim for #{report.ReportId} has been rejected.{ReasonSuffix(trimmedReason)}",
             claim.ReportId,
             $"claimrejected:{claim.ClaimId}");
 
         await _db.SaveChangesAsync();
         return LostFoundResult.Ok("Claim rejected successfully.");
     }
+
+    /// <summary>
+    /// The reviewer sends a claim back for more information. The claim
+    /// stays with the claimant until they answer, so nothing is approved
+    /// and nothing is released in the meantime.
+    /// </summary>
+    private async Task<LostFoundResult> RequestClaimInfoAsync(
+        ClaimRecord claim, LostFoundReport report, int actorUserId, string message)
+    {
+        claim.Status = "InformationRequested";
+        claim.DecisionReason = message.Trim();
+        claim.DecisionAt = PhNow();
+        claim.DecisionByUserId = actorUserId;
+
+        // Schedules are cancelled: nothing is handed over while a claim
+        // is being questioned.
+        var schedules = await _db.ClaimSchedules
+            .Where(s => s.ClaimId == claim.ClaimId && s.Status != "Completed" && s.Status != "Cancelled")
+            .ToListAsync();
+
+        foreach (var schedule in schedules)
+            schedule.Status = "Cancelled";
+
+        _db.LostFoundNotifications.Add(new Notification
+        {
+            UserId = claim.ClaimedByUserId,
+            ReportId = claim.ReportId,
+            Title = "More Information Needed",
+            Message = $"Your claim for #{report.ReportId} needs more information: {message.Trim()} Open the claim to add it.",
+            NotificationType = "ClaimInfoRequested",
+            IsRead = false,
+            CreatedAt = PhNow(),
+        });
+
+        await PushAsync(
+            claim.ClaimedByUserId,
+            "ClaimInfoRequested",
+            "More Information Needed",
+            $"Your claim for #{report.ReportId} needs more information: {message.Trim()}",
+            claim.ReportId,
+            $"claiminfo:{claim.ClaimId}");
+
+        await _db.SaveChangesAsync();
+        return LostFoundResult.Ok("Sent a request for more information to the claimant.");
+    }
+
+    /// <summary>Appends the reviewer's reason to a notification message.</summary>
+    private static string ReasonSuffix(string? reason) =>
+        string.IsNullOrWhiteSpace(reason) ? string.Empty : $" Reason: {reason.Trim()}";
 
     public async Task<LostFoundResult> CancelClaimAsync(int userId, int id)
     {
@@ -1169,22 +1603,41 @@ public class LostFoundService
 
             _db.MatchRecords.Add(match);
 
-            // Both owners hear about it once. The dedupe key is per pair per
-            // user, so a rescore never re-pushes.
-            foreach (var (ownerId, ownerReportId) in new[]
-                     {
-                         (lost.UserId, lost.ReportId),
-                         (found.UserId, found.ReportId),
-                     })
+            // Both owners hear about it, with different wording: the LOST
+            // reporter learns an item matching theirs turned up and is
+            // pointed at the claim form - nothing is claimed or released
+            // for them automatically. The dedupe key is per pair per
+            // user, so a rescore never re-notifies.
+            var owners = new[]
             {
-                var message =
-                    $"Possible match ({total}%): {lost.ItemName} may be the same as {found.ItemName}.";
+                (UserId: lost.UserId, ReportId: lost.ReportId, IsLostOwner: true),
+                (UserId: found.UserId, ReportId: found.ReportId, IsLostOwner: false),
+            };
+
+            foreach (var (ownerId, ownerReportId, isLostOwner) in owners)
+            {
+                string title;
+                string message;
+
+                if (isLostOwner)
+                {
+                    title = "A Matching Item Was Reported Found";
+                    message =
+                        $"An item matching your Lost Report was reported as found (#{found.ReportId}). " +
+                        "You may now submit a claim to verify ownership - the item has NOT been released to anyone yet.";
+                }
+                else
+                {
+                    title = "Possible match found";
+                    message =
+                        $"Possible match ({total}%): {lost.ItemName} may be the same as {found.ItemName}.";
+                }
 
                 _db.LostFoundNotifications.Add(new Notification
                 {
                     UserId = ownerId,
                     ReportId = ownerReportId,
-                    Title = "Possible match found",
+                    Title = title,
                     Message = message,
                     NotificationType = "MatchFound",
                     IsRead = false,
@@ -1194,10 +1647,10 @@ public class LostFoundService
                 await PushAsync(
                     ownerId,
                     "MatchFound",
-                    "Possible match found",
+                    title,
                     message,
                     ownerReportId,
-                    $"matchauto:{lost.ReportId}:{found.ReportId}:{ownerId}");
+                    $"matchauto:{lost.ReportId}:{found.ReportId}:{ownerId}:{isLostOwner}");
             }
         }
 
@@ -1759,6 +2212,17 @@ public class LostFoundService
                 ClaimDate = c.ClaimDate,
                 VerificationNotes = c.VerificationNotes,
                 Status = c.Status,
+                OwnershipExplanation = c.OwnershipExplanation,
+                IdentifyingDetails = c.IdentifyingDetails,
+                NoProofReason = c.NoProofReason,
+                HasProof = !string.IsNullOrEmpty(c.ProofAttachmentPath),
+                ProofFileName = c.ProofFileName,
+                ProofContentType = c.ProofContentType,
+                ProofUrl = string.IsNullOrEmpty(c.ProofAttachmentPath)
+                    ? null
+                    : $"/api/lostfound/claims/{c.ClaimId}/proof",
+                DecisionReason = c.DecisionReason,
+                DecisionAt = c.DecisionAt,
             };
         }).ToList();
     }

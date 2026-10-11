@@ -154,6 +154,7 @@ builder.Services.AddScoped<MarketplaceAuditService>();
 // `models` live in the same DbContext - no separate FINDDB, no duplicate
 // users table.
 builder.Services.AddScoped<LostFoundService>();
+builder.Services.AddScoped<IClaimProofStorage, ClaimProofStorage>();
 
 // LIBRARY ALERTS - every 6 hours: due-soon (1 day before), overdue, and
 // reservation-expiring notifications for patrons.

@@ -9,8 +9,9 @@ namespace CDM_OneServe_API.Controllers.LostFound;
 
 /// <summary>
 /// Claims on found items. A student claims an item they lost;
-/// the finder (or the Lost &amp; Found admin) marks it claimed or rejects
-/// it. Claiming opens a pickup schedule automatically.
+/// the finder (or the Lost &amp; Found admin) reviews the evidence,
+/// then marks it awaiting pickup or rejects it. Claiming opens a
+/// pickup schedule automatically.
 /// </summary>
 [ApiController]
 [Route("api/lostfound/claims")]
@@ -48,20 +49,66 @@ public class LostFoundClaimsController : LostFoundControllerBase
         return ToAction(await _service.GetClaimsForReportAsync(userId, reportId));
     }
 
+    /// <summary>
+    /// Stages a proof-of-ownership file. Only the generated reference is
+    /// returned; the bytes are never served from a public URL and the
+    /// real content type is verified from the file itself.
+    /// </summary>
+    [HttpPost("proof-upload")]
+    [RequestSizeLimit(5 * 1024 * 1024)]
+    public async Task<IActionResult> UploadProof(IFormFile file, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _service.UploadClaimProofAsync(userId, file, ct));
+    }
+
+    /// <summary>
+    /// Streams one claim's proof to an authorized reader only: the
+    /// claimant, the item's finder, or the Lost &amp; Found admin.
+    /// </summary>
+    [HttpGet("{id:int}/proof")]
+    public async Task<IActionResult> GetProof(int id, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+
+        var isAdmin = User.IsInRole("LostFoundAdmin") || User.IsInRole("Admin") ||
+                      User.IsInRole("SuperAdmin");
+
+        var result = await _service.GetClaimProofAsync(userId, id, isAdmin, ct);
+        if (!result.Success || result.Data == null) return ToAction(result);
+
+        Response.Headers.CacheControl = "no-store";
+        return File(result.Data.Content, result.Data.ContentType);
+    }
+
     /// <summary>Claim a found item you lost.</summary>
     [HttpPost]
-    public async Task<IActionResult> SubmitClaim(CreateClaimDto dto)
+    public async Task<IActionResult> SubmitClaim([FromBody] CreateClaimDto dto)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
         return ToAction(await _service.SubmitClaimAsync(userId, dto));
     }
 
-    /// <summary>The finder (or admin) marks a claim as claimed or rejects it.</summary>
+    /// <summary>
+    /// The finder (or admin) decides a claim: awaiting pickup, rejected
+    /// with a reason, or sent back for more information with a message.
+    /// </summary>
     [HttpPut("{id:int}/status")]
     public async Task<IActionResult> UpdateClaimStatus(int id, [FromBody] UpdateStatusDto dto)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
-        return ToAction(await _service.UpdateClaimStatusAsync(userId, id, dto.Status));
+        return ToAction(await _service.UpdateClaimStatusAsync(userId, id, dto.Status, dto.Reason));
+    }
+
+    /// <summary>
+    /// The claimant answers a request for more information on their own
+    /// claim, while it is still under review.
+    /// </summary>
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> UpdateClaim(int id, [FromBody] CreateClaimDto dto, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _service.UpdateMyClaimAsync(userId, id, dto, ct));
     }
 
     /// <summary>A claimant withdraws their own claim.</summary>
