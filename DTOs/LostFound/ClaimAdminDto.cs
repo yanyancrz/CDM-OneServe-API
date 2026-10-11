@@ -51,7 +51,7 @@ public class AdminStatsDto
 
     public int ProcessingClaims { get; set; }
 
-    public int ClaimedClaims { get; set; }
+    public int AwaitingPickupClaims { get; set; }
 
     public int RejectedClaims { get; set; }
 

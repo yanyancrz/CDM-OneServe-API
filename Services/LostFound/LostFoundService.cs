@@ -17,7 +17,7 @@ namespace CDM_OneServe_API.Services.LostFound;
 ///
 /// The state machine is the one FIND shipped with:
 ///   report  Pending -> Published | Rejected
-///   claim   Processing -> Claimed -> Returned
+///   claim   Processing -> Awaiting Pickup -> Returned
 ///                       \-> Rejected / Cancelled
 ///   schedule AwaitingPickup -> Scheduled -> Completed | Cancelled
 ///   recovery Pending | AtAdminOffice -> Completed | Rejected
@@ -372,7 +372,7 @@ public class LostFoundService
         var hasActiveClaim = await _db.ClaimRecords.AnyAsync(c =>
             c.ReportId == dto.ReportId &&
             c.ClaimedByUserId == userId &&
-            (c.Status == "Processing" || c.Status == "Claimed" || c.Status == "Scheduled"));
+            (c.Status == "Processing" || c.Status == "Awaiting Pickup" || c.Status == "Scheduled"));
 
         if (hasActiveClaim)
             return LostFoundResult<MyClaimDto>.BadRequest("You already have an active claim for this item.");
@@ -414,18 +414,22 @@ public class LostFoundService
     }
 
     /// <summary>
-    /// The finder (or the admin) marks a claim as claimed or rejected.
-    /// Claiming opens an "Awaiting Pickup" schedule and notifies the
-    /// claimant; rejection closes the claim, cancels its schedules and -
-    /// for a lost report - rejects the recovery and returns the report
-    /// to the board.
+    /// The finder (or the admin) approves a claim for pickup or rejects it.
+    /// Approving moves the claim straight to "Awaiting Pickup" (the same
+    /// status the pickup queue shows), opens an "Awaiting Pickup" schedule
+    /// and notifies the claimant; rejection closes the claim, cancels its
+    /// schedules and - for a lost report - rejects the recovery and returns
+    /// the report to the board.
     /// </summary>
     public async Task<LostFoundResult> UpdateClaimStatusAsync(int actorUserId, int id, string status)
     {
         var requested = status?.Trim() ?? "";
 
-        if (!IsStatus(requested, "Claimed") && !IsStatus(requested, "Rejected"))
-            return LostFoundResult.BadRequest("Invalid status. Use Claimed or Rejected.");
+        // "Claimed" is accepted for older clients and means the same thing.
+        var approve = IsStatus(requested, "Awaiting Pickup") || IsStatus(requested, "Claimed");
+
+        if (!approve && !IsStatus(requested, "Rejected"))
+            return LostFoundResult.BadRequest("Invalid status. Use Awaiting Pickup or Rejected.");
 
         var claim = await _db.ClaimRecords
             .Include(c => c.Report)
@@ -443,15 +447,15 @@ public class LostFoundService
         if (actorUserId != finderId && !await IsLostFoundAdminAsync(actorUserId))
             return LostFoundResult.Forbidden("Only the item's finder or the Lost & Found admin can review claims.");
 
-        if (IsStatus(requested, "Claimed"))
+        if (approve)
         {
             if (!IsStatus(claim.Status, "Processing"))
-                return LostFoundResult.BadRequest("Only processing claims can be marked as claimed.");
+                return LostFoundResult.BadRequest("Only processing claims can be approved for pickup.");
 
             if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == claim.ReportId && c.Status == "Returned"))
                 return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
-            claim.Status = "Claimed";
+            claim.Status = "Awaiting Pickup";
 
             var hasSchedule = await _db.ClaimSchedules
                 .AnyAsync(s => s.ClaimId == claim.ClaimId && s.Status != "Cancelled");
@@ -476,8 +480,8 @@ public class LostFoundService
             {
                 UserId = claim.ClaimedByUserId,
                 ReportId = claim.ReportId,
-                Title = "Item Claimed",
-                Message = $"Your claim for {report.ItemName} is now marked as claimed. You may visit the {PickupLocation} for handover or select an available pickup schedule.",
+                Title = "Ready for Pickup",
+                Message = $"Your claim for {report.ItemName} is approved. It is now awaiting pickup - visit the {PickupLocation} during office hours for the handover.",
                 NotificationType = "ClaimApproved",
                 IsRead = false,
                 CreatedAt = PhNow(),
@@ -486,13 +490,13 @@ public class LostFoundService
             await PushAsync(
                 claim.ClaimedByUserId,
                 "ClaimApproved",
-                "Item Claimed",
-                $"Your claim for {report.ItemName} is now marked as claimed. You may visit the {PickupLocation} for handover or select an available pickup schedule.",
+                "Ready for Pickup",
+                $"Your claim for {report.ItemName} is approved and awaiting pickup at the {PickupLocation}.",
                 claim.ReportId,
                 $"claimapproved:{claim.ClaimId}");
 
             await _db.SaveChangesAsync();
-            return LostFoundResult.Ok("Claim marked as claimed and added to pickup schedules.");
+            return LostFoundResult.Ok("Claim approved and queued for pickup.");
         }
 
         // ---- Rejected ----
@@ -554,9 +558,9 @@ public class LostFoundService
         if (claim.ClaimedByUserId != userId)
             return LostFoundResult.Forbidden("You can only cancel your own claim.");
 
-        if (!(IsStatus(claim.Status, "Processing") || IsStatus(claim.Status, "Claimed") ||
+        if (!(IsStatus(claim.Status, "Processing") ||
               IsStatus(claim.Status, "Scheduled") || IsStatus(claim.Status, "Awaiting Pickup")))
-            return LostFoundResult.BadRequest("Only Processing, Claimed, Awaiting Pickup, or Scheduled claims can be cancelled.");
+            return LostFoundResult.BadRequest("Only Processing, Awaiting Pickup, or Scheduled claims can be cancelled.");
 
         claim.Status = "Cancelled";
 
@@ -873,7 +877,7 @@ public class LostFoundService
         var otherClaims = await _db.ClaimRecords
             .Where(c => c.ReportId == schedule.Claim.ReportId &&
                         c.ClaimId != schedule.ClaimId &&
-                        (c.Status == "Processing" || c.Status == "Claimed" ||
+                        (c.Status == "Processing" ||
                          c.Status == "Scheduled" || c.Status == "Awaiting Pickup"))
             .ToListAsync();
 
@@ -914,7 +918,7 @@ public class LostFoundService
     }
 
     /// <summary>
-    /// Older claimed items predate the automatic schedule, so one is
+    /// Older pickups predate the automatic schedule, so one is
     /// created on read. Cancelled schedules do not count: they are
     /// replaceable.
     /// </summary>
@@ -922,7 +926,7 @@ public class LostFoundService
     {
         var approvedClaims = await _db.ClaimRecords
             .Include(c => c.Report)
-            .Where(c => c.Status == "Claimed" && c.Report != null)
+            .Where(c => c.Status == "Awaiting Pickup" && c.Report != null)
             .ToListAsync();
 
         var addedAny = false;
@@ -1372,8 +1376,8 @@ public class LostFoundService
         if (report.UserId == userId)
             return LostFoundResult<RecoveryDto>.BadRequest("You cannot report recovering your own lost item.");
 
-        if (IsStatus(report.Status, "Returned") || IsStatus(report.Status, "Claimed"))
-            return LostFoundResult<RecoveryDto>.BadRequest("This item is no longer available for recovery.");
+        if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == report.ReportId && c.Status == "Returned"))
+            return LostFoundResult<RecoveryDto>.BadRequest("This item has already been returned and is no longer available for recovery.");
 
         var recoveryMethod = dto.RecoveryMethod?.Trim() ?? "";
 
@@ -1416,7 +1420,7 @@ public class LostFoundService
         var ownerClaim = await _db.ClaimRecords
             .Where(c => c.ReportId == report.ReportId &&
                         c.ClaimedByUserId == report.UserId &&
-                        (c.Status == "Processing" || c.Status == "Claimed" || c.Status == "Scheduled"))
+                        (c.Status == "Processing" || c.Status == "Awaiting Pickup" || c.Status == "Scheduled"))
             .FirstOrDefaultAsync();
 
         if (ownerClaim is null)
@@ -1580,7 +1584,7 @@ public class LostFoundService
                 claims.Any(c => c.ReportId == r.ReportId && c.Status == "Returned")),
             TotalClaims = await claims.CountAsync(),
             ProcessingClaims = await claims.CountAsync(c => c.Status == "Processing"),
-            ClaimedClaims = await claims.CountAsync(c => c.Status == "Claimed"),
+            AwaitingPickupClaims = await claims.CountAsync(c => c.Status == "Awaiting Pickup"),
             RejectedClaims = await claims.CountAsync(c => c.Status == "Rejected"),
             ReturnedClaims = await claims.CountAsync(c => c.Status == "Returned"),
             TotalSchedules = await schedules.CountAsync(),
