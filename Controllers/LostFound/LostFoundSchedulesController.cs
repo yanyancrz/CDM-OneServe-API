@@ -11,8 +11,8 @@ namespace CDM_OneServe_API.Controllers.LostFound;
 /// Pickup availability and pickup schedules.
 ///
 /// The Lost &amp; Found admin publishes the windows when the
-/// Student Affairs Office accepts handovers; a claimant with an
-/// approved claim books a slot inside one; the admin records the
+/// Student Affairs Office accepts handovers; claimants walk in during
+/// those windows (nobody books a slot); the admin records the
 /// handover itself, which completes the claim.
 /// </summary>
 [ApiController]
@@ -57,14 +57,6 @@ public class LostFoundSchedulesController : LostFoundControllerBase
     public async Task<IActionResult> DeleteAvailability(int id)
     {
         return ToAction(await _service.DeleteAvailabilityAsync(id));
-    }
-
-    /// <summary>Book a slot inside a published window.</summary>
-    [HttpPost("book")]
-    public async Task<IActionResult> BookSchedule(BookPickupScheduleDto dto)
-    {
-        if (!TryGetUserId(out var userId)) return InvalidSession();
-        return ToAction(await _service.BookScheduleAsync(userId, dto));
     }
 
     /// <summary>The schedule for one claim - claimant, finder or admin.</summary>
