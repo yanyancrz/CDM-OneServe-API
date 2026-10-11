@@ -53,6 +53,14 @@ public class LostFoundReportsController : LostFoundControllerBase
         return Ok(ApiResponse.Ok(await _service.GetRecentFoundAsync()));
     }
 
+    /// <summary>Six most recent approved lost items, for the home screen.</summary>
+    [HttpGet("recent-lost")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetRecentLost()
+    {
+        return Ok(ApiResponse.Ok(await _service.GetRecentLostAsync()));
+    }
+
     /// <summary>One report, if it is on the board.</summary>
     [HttpGet("{id:int}")]
     [AllowAnonymous]

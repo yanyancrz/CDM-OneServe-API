@@ -109,6 +109,14 @@ public class LostFoundService
             .Select(r => ToReportDto(r))
             .ToListAsync();
 
+    public async Task<List<ReportDto>> GetRecentLostAsync() =>
+        await _db.LostFoundReports
+            .Where(r => r.ReportType == "Lost" && r.Status == "Approved")
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(6)
+            .Select(r => ToReportDto(r))
+            .ToListAsync();
+
     /// <summary>A single report, if the caller may see it.</summary>
     public async Task<ReportDto?> GetReportAsync(int id)
     {
