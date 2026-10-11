@@ -1605,6 +1605,65 @@ public class LostFoundService
             .Select(r => ToReportDto(r))
             .ToListAsync();
 
+    /// <summary>
+    /// One item's full console view: the report, its reporter, every
+    /// claim on it, the latest recovery and every match it appears in.
+    /// </summary>
+    public async Task<LostFoundResult<AdminReportDetailDto>> GetAdminReportAsync(int id)
+    {
+        var report = await _db.LostFoundReports.FirstOrDefaultAsync(r => r.ReportId == id);
+        if (report is null)
+            return LostFoundResult<AdminReportDetailDto>.NotFound("Report not found.");
+
+        var reporter = await _db.Users.FindAsync(report.UserId);
+
+        var recoveryRecord = await _db.RecoveryRecords
+            .Where(r => r.ReportId == id)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync();
+
+        RecoveryDto? recovery = null;
+        if (recoveryRecord is not null)
+        {
+            var finder = await _db.Users.FindAsync(recoveryRecord.FinderUserId);
+            recovery = new RecoveryDto
+            {
+                RecoveryId = recoveryRecord.RecoveryId,
+                ReportId = recoveryRecord.ReportId,
+                ItemName = report.ItemName,
+                FinderUserId = recoveryRecord.FinderUserId,
+                FinderName = finder?.FullName ?? string.Empty,
+                FinderEmail = finder?.Email ?? string.Empty,
+                RecoveryMethod = recoveryRecord.RecoveryMethod,
+                Message = recoveryRecord.Message,
+                ContactMethod = recoveryRecord.ContactMethod,
+                ContactInfo = recoveryRecord.ContactInfo,
+                Status = recoveryRecord.Status,
+                CreatedAt = recoveryRecord.CreatedAt,
+                CompletedAt = recoveryRecord.CompletedAt,
+            };
+        }
+
+        var matches = await _db.MatchRecords
+            .Include(m => m.LostReport)
+            .Include(m => m.FoundReport)
+            .Where(m => m.LostReportId == id || m.FoundReportId == id)
+            .OrderByDescending(m => m.MatchPercentage)
+            .Select(m => ToMatchDto(m))
+            .ToListAsync();
+
+        return LostFoundResult<AdminReportDetailDto>.Ok(new AdminReportDetailDto
+        {
+            Report = ToReportDto(report),
+            ReporterName = reporter?.FullName ?? string.Empty,
+            ReporterEmail = reporter?.Email ?? string.Empty,
+            ReporterIdNumber = reporter?.IdNumber ?? string.Empty,
+            Claims = await ToClaimAdminListAsync(id),
+            Recovery = recovery,
+            Matches = matches,
+        });
+    }
+
     public async Task<List<ClaimAdminDto>> GetAllClaimsAsync() =>
         await ToClaimAdminListAsync();
 
@@ -1828,5 +1887,7 @@ public class LostFoundService
         CategoryScore = m.CategoryScore,
         LocationScore = m.LocationScore,
         DateScore = m.DateScore,
+        LostReport = m.LostReport is null ? null : ToReportDto(m.LostReport),
+        FoundReport = m.FoundReport is null ? null : ToReportDto(m.FoundReport),
     };
 }

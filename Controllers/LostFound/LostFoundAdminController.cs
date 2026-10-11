@@ -34,6 +34,13 @@ public class LostFoundAdminController : LostFoundControllerBase
         return Ok(ApiResponse.Ok(await _service.GetAllReportsAsync()));
     }
 
+    [HttpGet("reports/{id:int}")]
+    public async Task<IActionResult> GetReport(int id)
+    {
+        var r = await _service.GetAdminReportAsync(id);
+        return r.Success ? Ok(ApiResponse.Ok(r.Data)) : StatusCode(r.Status, ApiResponse.Fail(r.Message ?? "Request failed."));
+    }
+
     [HttpGet("claims")]
     public async Task<IActionResult> GetClaims()
     {
