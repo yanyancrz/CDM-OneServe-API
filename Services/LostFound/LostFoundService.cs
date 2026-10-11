@@ -16,8 +16,8 @@ namespace CDM_OneServe_API.Services.LostFound;
 /// is the signed-in OneServe user, read from the JWT by the controllers.
 ///
 /// The state machine is the one FIND shipped with:
-///   report  Pending -> Approved | Rejected -> Claimed
-///   claim   Pending -> Approved -> Scheduled -> Completed
+///   report  Pending -> Published | Rejected
+///   claim   Processing -> Claimed -> Returned
 ///                       \-> Rejected / Cancelled
 ///   schedule AwaitingPickup -> Scheduled -> Completed | Cancelled
 ///   recovery Pending | AtAdminOffice -> Completed | Rejected
@@ -87,15 +87,18 @@ public class LostFoundService
             .ToListAsync();
 
     /// <summary>
-    /// The public board. Only reports the admin has approved - and that
-    /// are not already handed over - are visible to the campus.
+    /// The public board. Only published reports - and not ones already
+    /// handed over (a Returned claim) - are visible to the campus.
+    /// Search covers the item name, description and category.
     /// </summary>
     public async Task<List<ReportDto>> GetPublicAsync(string? type, string? status, string? search) =>
         await _db.LostFoundReports
-            .Where(r => (r.Status == "Approved" || r.Status == "Found") &&
+            .Where(r => (r.Status == "Published" || r.Status == "Found") &&
+                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned") &&
                         (string.IsNullOrEmpty(type) || r.ReportType == type) &&
                         (string.IsNullOrEmpty(status) || r.Status == status) &&
-                        (string.IsNullOrEmpty(search) || r.ItemName.Contains(search))
+                        (string.IsNullOrEmpty(search) || r.ItemName.Contains(search) ||
+                         r.Description.Contains(search) || r.Category.Contains(search))
             )
             .OrderByDescending(r => r.CreatedAt)
             .Select(r => ToReportDto(r))
@@ -103,7 +106,8 @@ public class LostFoundService
 
     public async Task<List<ReportDto>> GetRecentFoundAsync() =>
         await _db.LostFoundReports
-            .Where(r => r.ReportType == "Found" && r.Status == "Approved")
+            .Where(r => r.ReportType == "Found" && r.Status == "Published" &&
+                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned"))
             .OrderByDescending(r => r.CreatedAt)
             .Take(6)
             .Select(r => ToReportDto(r))
@@ -111,7 +115,8 @@ public class LostFoundService
 
     public async Task<List<ReportDto>> GetRecentLostAsync() =>
         await _db.LostFoundReports
-            .Where(r => r.ReportType == "Lost" && r.Status == "Approved")
+            .Where(r => r.ReportType == "Lost" && r.Status == "Published" &&
+                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned"))
             .OrderByDescending(r => r.CreatedAt)
             .Take(6)
             .Select(r => ToReportDto(r))
@@ -152,12 +157,12 @@ public class LostFoundService
             Description = dto.Description ?? string.Empty,
             Category = dto.Category ?? string.Empty,
             Location = dto.Location ?? string.Empty,
-            DateLostFound = dto.DateLostFound,
+            DateLostFound = ToPhWallClock(dto.DateLostFound),
             ReportType = isLost ? "Lost" : "Found",
             ImagePath = string.IsNullOrWhiteSpace(dto.ImagePath) ? null : dto.ImagePath,
             ItemCustody = custody,
             Status = "Pending",
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         };
 
         _db.LostFoundReports.Add(report);
@@ -181,7 +186,7 @@ public class LostFoundService
         report.Description = dto.Description ?? string.Empty;
         report.Category = dto.Category ?? string.Empty;
         report.Location = dto.Location ?? string.Empty;
-        report.DateLostFound = dto.DateLostFound;
+        report.DateLostFound = ToPhWallClock(dto.DateLostFound);
         report.ImagePath = string.IsNullOrWhiteSpace(dto.ImagePath) ? null : dto.ImagePath;
 
         await _db.SaveChangesAsync();
@@ -206,13 +211,13 @@ public class LostFoundService
         return LostFoundResult.Ok("Report deleted.");
     }
 
-    /// <summary>Admin review: approve or reject a pending report.</summary>
+    /// <summary>Admin review: publish or reject a pending report.</summary>
     public async Task<LostFoundResult<ReportDto>> UpdateReportStatusAsync(int id, string status)
     {
         var requested = status?.Trim() ?? "";
 
-        if (!IsStatus(requested, "Approved") && !IsStatus(requested, "Rejected"))
-            return LostFoundResult<ReportDto>.BadRequest("Invalid status. Use Approved or Rejected.");
+        if (!IsStatus(requested, "Published") && !IsStatus(requested, "Rejected"))
+            return LostFoundResult<ReportDto>.BadRequest("Invalid status. Use Published or Rejected.");
 
         var report = await _db.LostFoundReports.FirstOrDefaultAsync(r => r.ReportId == id);
         if (report is null)
@@ -221,14 +226,14 @@ public class LostFoundService
         if (!IsStatus(report.Status, "Pending"))
             return LostFoundResult<ReportDto>.BadRequest("Only pending reports can be reviewed.");
 
-        report.Status = IsStatus(requested, "Approved") ? "Approved" : "Rejected";
+        report.Status = IsStatus(requested, "Published") ? "Published" : "Rejected";
 
         await _db.SaveChangesAsync();
 
-        // Approving publishes the report - and publishing recomputes its
-        // matches, so the matches page fills itself. Rejecting retracts it:
-        // unconfirmed pairs involving it are withdrawn.
-        if (IsStatus(report.Status, "Approved"))
+        // Publishing puts the report on the board - and publishing
+        // recomputes its matches, so the matches page fills itself.
+        // Rejecting retracts it: unconfirmed pairs involving it are withdrawn.
+        if (IsStatus(report.Status, "Published"))
         {
             await RefreshAutoMatchesAsync(report);
         }
@@ -361,13 +366,13 @@ public class LostFoundService
         if (report.UserId == userId)
             return LostFoundResult<MyClaimDto>.BadRequest("You cannot claim your own found item report.");
 
-        if (IsStatus(report.Status, "Claimed"))
-            return LostFoundResult<MyClaimDto>.BadRequest("This item has already been claimed.");
+        if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == dto.ReportId && c.Status == "Returned"))
+            return LostFoundResult<MyClaimDto>.BadRequest("This item has already been returned to its owner.");
 
         var hasActiveClaim = await _db.ClaimRecords.AnyAsync(c =>
             c.ReportId == dto.ReportId &&
             c.ClaimedByUserId == userId &&
-            (c.Status == "Pending" || c.Status == "Approved" || c.Status == "Scheduled"));
+            (c.Status == "Processing" || c.Status == "Claimed" || c.Status == "Scheduled"));
 
         if (hasActiveClaim)
             return LostFoundResult<MyClaimDto>.BadRequest("You already have an active claim for this item.");
@@ -377,8 +382,8 @@ public class LostFoundService
             ReportId = report.ReportId,
             ClaimedByUserId = userId,
             VerificationNotes = dto.VerificationNotes?.Trim() ?? string.Empty,
-            ClaimDate = DateTime.UtcNow,
-            Status = "Pending",
+            ClaimDate = PhNow(),
+            Status = "Processing",
         };
 
         _db.ClaimRecords.Add(claim);
@@ -391,7 +396,7 @@ public class LostFoundService
             Message = $"A student submitted a claim for your found item: {report.ItemName}.",
             NotificationType = "ClaimSubmitted",
             IsRead = false,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         });
 
         await PushAsync(
@@ -409,8 +414,8 @@ public class LostFoundService
     }
 
     /// <summary>
-    /// The finder (or the admin) approves or rejects a claim.
-    /// Approval opens an "Awaiting Pickup" schedule and notifies the
+    /// The finder (or the admin) marks a claim as claimed or rejected.
+    /// Claiming opens an "Awaiting Pickup" schedule and notifies the
     /// claimant; rejection closes the claim, cancels its schedules and -
     /// for a lost report - rejects the recovery and returns the report
     /// to the board.
@@ -419,8 +424,8 @@ public class LostFoundService
     {
         var requested = status?.Trim() ?? "";
 
-        if (!IsStatus(requested, "Approved") && !IsStatus(requested, "Rejected"))
-            return LostFoundResult.BadRequest("Invalid status. Use Approved or Rejected.");
+        if (!IsStatus(requested, "Claimed") && !IsStatus(requested, "Rejected"))
+            return LostFoundResult.BadRequest("Invalid status. Use Claimed or Rejected.");
 
         var claim = await _db.ClaimRecords
             .Include(c => c.Report)
@@ -438,15 +443,15 @@ public class LostFoundService
         if (actorUserId != finderId && !await IsLostFoundAdminAsync(actorUserId))
             return LostFoundResult.Forbidden("Only the item's finder or the Lost & Found admin can review claims.");
 
-        if (IsStatus(requested, "Approved"))
+        if (IsStatus(requested, "Claimed"))
         {
-            if (!IsStatus(claim.Status, "Pending"))
-                return LostFoundResult.BadRequest("Only pending claims can be approved.");
+            if (!IsStatus(claim.Status, "Processing"))
+                return LostFoundResult.BadRequest("Only processing claims can be marked as claimed.");
 
-            if (IsStatus(report.Status, "Claimed"))
-                return LostFoundResult.BadRequest("This item has already been claimed.");
+            if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == claim.ReportId && c.Status == "Returned"))
+                return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
-            claim.Status = "Approved";
+            claim.Status = "Claimed";
 
             var hasSchedule = await _db.ClaimSchedules
                 .AnyAsync(s => s.ClaimId == claim.ClaimId && s.Status != "Cancelled");
@@ -460,10 +465,10 @@ public class LostFoundService
                     ClaimId = claim.ClaimId,
                     ClaimantUserId = claim.ClaimedByUserId,
                     StudentId = claimant?.IdNumber ?? string.Empty,
-                    ScheduledDateTime = DateTime.UtcNow,
+                    ScheduledDateTime = PhNow(),
                     PickupLocation = PickupLocation,
                     Status = "Awaiting Pickup",
-                    CreatedAt = DateTime.UtcNow,
+                    CreatedAt = PhNow(),
                 });
             }
 
@@ -471,23 +476,23 @@ public class LostFoundService
             {
                 UserId = claim.ClaimedByUserId,
                 ReportId = claim.ReportId,
-                Title = "Claim Approved",
-                Message = $"Your claim for {report.ItemName} has been approved. You may visit the {PickupLocation} for handover or select an available pickup schedule.",
+                Title = "Item Claimed",
+                Message = $"Your claim for {report.ItemName} is now marked as claimed. You may visit the {PickupLocation} for handover or select an available pickup schedule.",
                 NotificationType = "ClaimApproved",
                 IsRead = false,
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = PhNow(),
             });
 
             await PushAsync(
                 claim.ClaimedByUserId,
                 "ClaimApproved",
-                "Claim Approved",
-                $"Your claim for {report.ItemName} has been approved. You may visit the {PickupLocation} for handover or select an available pickup schedule.",
+                "Item Claimed",
+                $"Your claim for {report.ItemName} is now marked as claimed. You may visit the {PickupLocation} for handover or select an available pickup schedule.",
                 claim.ReportId,
                 $"claimapproved:{claim.ClaimId}");
 
             await _db.SaveChangesAsync();
-            return LostFoundResult.Ok("Claim approved and added to pickup schedules.");
+            return LostFoundResult.Ok("Claim marked as claimed and added to pickup schedules.");
         }
 
         // ---- Rejected ----
@@ -503,7 +508,7 @@ public class LostFoundService
             if (recovery is not null)
                 recovery.Status = "Rejected";
 
-            report.Status = "Approved";
+            report.Status = "Published";
             report.ItemCustody = "None";
         }
 
@@ -522,7 +527,7 @@ public class LostFoundService
             Message = $"Your claim for {report.ItemName} has been rejected.",
             NotificationType = "ClaimRejected",
             IsRead = false,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         });
 
         await PushAsync(
@@ -549,9 +554,9 @@ public class LostFoundService
         if (claim.ClaimedByUserId != userId)
             return LostFoundResult.Forbidden("You can only cancel your own claim.");
 
-        if (!(IsStatus(claim.Status, "Pending") || IsStatus(claim.Status, "Approved") ||
+        if (!(IsStatus(claim.Status, "Processing") || IsStatus(claim.Status, "Claimed") ||
               IsStatus(claim.Status, "Scheduled") || IsStatus(claim.Status, "Awaiting Pickup")))
-            return LostFoundResult.BadRequest("Only Pending, Approved, Awaiting Pickup, or Scheduled claims can be cancelled.");
+            return LostFoundResult.BadRequest("Only Processing, Claimed, Awaiting Pickup, or Scheduled claims can be cancelled.");
 
         claim.Status = "Cancelled";
 
@@ -572,7 +577,7 @@ public class LostFoundService
             if (recovery is not null)
                 recovery.Status = "Rejected";
 
-            claim.Report.Status = "Approved";
+            claim.Report.Status = "Published";
             claim.Report.ItemCustody = "None";
         }
 
@@ -607,7 +612,7 @@ public class LostFoundService
 
     public async Task<List<PickupAvailabilityDto>> GetAvailabilityAsync()
     {
-        var now = DateTime.Now;
+        var now = PhNow();
 
         return await _db.PickupAvailabilities
             .Where(a => a.IsActive && a.EndDateTime >= now)
@@ -625,13 +630,13 @@ public class LostFoundService
 
     public async Task<LostFoundResult<PickupAvailabilityDto>> CreateAvailabilityAsync(CreatePickupAvailabilityDto dto)
     {
-        var start = NormalizeDateTime(dto.StartDateTime);
-        var end = NormalizeDateTime(dto.EndDateTime);
+        var start = NormalizeFutureDateTime(dto.StartDateTime);
+        var end = NormalizeFutureDateTime(dto.EndDateTime);
 
         if (start >= end)
             return LostFoundResult<PickupAvailabilityDto>.BadRequest("The start time must be before the end time.");
 
-        if (start <= DateTime.Now)
+        if (start <= PhNow())
             return LostFoundResult<PickupAvailabilityDto>.BadRequest("Pickup availability must start in the future.");
 
         var overlaps = await _db.PickupAvailabilities
@@ -645,7 +650,7 @@ public class LostFoundService
             StartDateTime = start,
             EndDateTime = end,
             IsActive = true,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         };
 
         _db.PickupAvailabilities.Add(availability);
@@ -660,14 +665,14 @@ public class LostFoundService
             return LostFoundResult.BadRequest("At least one pickup availability period is required.");
 
         var periods = dto.Availability
-            .Select(x => new { Start = NormalizeDateTime(x.StartDateTime), End = NormalizeDateTime(x.EndDateTime) })
+            .Select(x => new { Start = NormalizeFutureDateTime(x.StartDateTime), End = NormalizeFutureDateTime(x.EndDateTime) })
             .OrderBy(x => x.Start)
             .ToList();
 
         if (periods.Any(x => x.Start >= x.End))
             return LostFoundResult.BadRequest("Every availability period must have a start time before its end time.");
 
-        if (periods.Any(x => x.Start <= DateTime.Now))
+        if (periods.Any(x => x.Start <= PhNow()))
             return LostFoundResult.BadRequest("All pickup availability periods must start in the future.");
 
         for (var i = 1; i < periods.Count; i++)
@@ -691,7 +696,7 @@ public class LostFoundService
             StartDateTime = p.Start,
             EndDateTime = p.End,
             IsActive = true,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         }).ToList();
 
         _db.PickupAvailabilities.AddRange(entities);
@@ -776,8 +781,8 @@ public class LostFoundService
     }
 
     /// <summary>
-    /// The handover itself. Marks the schedule and claim Completed, the
-    /// report Claimed, completes a lost-item recovery, notifies both
+    /// The handover itself. Marks the schedule Completed and the claim
+    /// Returned, completes a lost-item recovery, notifies both
     /// parties and closes every other active claim on the report.
     /// </summary>
     public async Task<LostFoundResult> CompleteScheduleAsync(int adminId, int scheduleId, CompleteClaimScheduleDto dto)
@@ -807,21 +812,22 @@ public class LostFoundService
 
         var report = schedule.Claim.Report;
 
-        if (IsStatus(report.Status, "Claimed"))
-            return LostFoundResult.BadRequest("This item has already been claimed.");
+        if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == report.ReportId && c.Status == "Returned"))
+            return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
         var actualFinderUserId = await GetActualFinderUserIdAsync(report);
 
         schedule.ReceivedByName = receivedName;
         schedule.ReceivedByStudentId = receivedStudentId;
         schedule.StudentId = receivedStudentId;
-        schedule.VerifiedAt = DateTime.UtcNow;
+        schedule.VerifiedAt = PhNow();
         schedule.VerifiedByAdminId = adminId;
-        schedule.CompletedAt = DateTime.UtcNow;
+        schedule.CompletedAt = PhNow();
         schedule.Status = "Completed";
 
-        schedule.Claim.Status = "Completed";
-        report.Status = "Claimed";
+        // The item is back with its owner - the report stays Published but
+        // drops off the board (board queries exclude Returned claims).
+        schedule.Claim.Status = "Returned";
 
         if (IsStatus(report.ReportType, "Lost"))
         {
@@ -842,7 +848,7 @@ public class LostFoundService
             Message = $"The handover for {report.ItemName} has been completed at {PickupLocation}.",
             NotificationType = "RecoveryCompleted",
             IsRead = false,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         });
 
         await PushAsync(
@@ -867,7 +873,7 @@ public class LostFoundService
         var otherClaims = await _db.ClaimRecords
             .Where(c => c.ReportId == schedule.Claim.ReportId &&
                         c.ClaimId != schedule.ClaimId &&
-                        (c.Status == "Pending" || c.Status == "Approved" ||
+                        (c.Status == "Processing" || c.Status == "Claimed" ||
                          c.Status == "Scheduled" || c.Status == "Awaiting Pickup"))
             .ToListAsync();
 
@@ -883,7 +889,7 @@ public class LostFoundService
                 Message = $"The item {report.ItemName} has already been handed over to another claimant.",
                 NotificationType = "ClaimRejected",
                 IsRead = false,
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = PhNow(),
             });
 
             await PushAsync(
@@ -908,7 +914,7 @@ public class LostFoundService
     }
 
     /// <summary>
-    /// Older approved claims predate the automatic schedule, so one is
+    /// Older claimed items predate the automatic schedule, so one is
     /// created on read. Cancelled schedules do not count: they are
     /// replaceable.
     /// </summary>
@@ -916,7 +922,7 @@ public class LostFoundService
     {
         var approvedClaims = await _db.ClaimRecords
             .Include(c => c.Report)
-            .Where(c => c.Status == "Approved" && c.Report != null)
+            .Where(c => c.Status == "Claimed" && c.Report != null)
             .ToListAsync();
 
         var addedAny = false;
@@ -936,10 +942,10 @@ public class LostFoundService
                 ClaimId = claim.ClaimId,
                 ClaimantUserId = claim.ClaimedByUserId,
                 StudentId = claimant?.IdNumber ?? string.Empty,
-                ScheduledDateTime = DateTime.UtcNow,
+                ScheduledDateTime = PhNow(),
                 PickupLocation = PickupLocation,
                 Status = "Awaiting Pickup",
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = PhNow(),
             });
 
             addedAny = true;
@@ -1076,13 +1082,13 @@ public class LostFoundService
             .Where(token => token.Length >= 2 && token.Any(char.IsLetterOrDigit)));
 
     /// <summary>
-    /// Recomputes automatic matches for every approved report. Confirmed
+    /// Recomputes automatic matches for every published report. Confirmed
     /// pairs are never rescored - a human verdict beats the arithmetic.
     /// </summary>
     public async Task<int> RecomputeAllAutoMatchesAsync()
     {
         var reports = await _db.LostFoundReports
-            .Where(r => r.Status == "Approved")
+            .Where(r => r.Status == "Published")
             .ToListAsync();
 
         foreach (var report in reports)
@@ -1102,7 +1108,8 @@ public class LostFoundService
 
         var candidates = await _db.LostFoundReports
             .Where(r => r.ReportId != report.ReportId &&
-                        (r.Status == "Approved" || r.Status == "Found") &&
+                        (r.Status == "Published" || r.Status == "Found") &&
+                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned") &&
                         (isLost ? r.ReportType == "Found" : r.ReportType == "Lost"))
             .ToListAsync();
 
@@ -1153,7 +1160,7 @@ public class LostFoundService
                 LocationScore = location,
                 DateScore = date,
                 IsConfirmed = false,
-                CreatedAt = DateTime.UtcNow,
+                CreatedAt = PhNow(),
             };
 
             _db.MatchRecords.Add(match);
@@ -1177,7 +1184,7 @@ public class LostFoundService
                     Message = message,
                     NotificationType = "MatchFound",
                     IsRead = false,
-                    CreatedAt = DateTime.UtcNow,
+                    CreatedAt = PhNow(),
                 });
 
                 await PushAsync(
@@ -1230,7 +1237,7 @@ public class LostFoundService
             FoundReportId = foundReport.ReportId,
             MatchPercentage = percentage,
             IsConfirmed = false,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         };
 
         _db.MatchRecords.Add(match);
@@ -1396,7 +1403,7 @@ public class LostFoundService
             ContactInfo = contactInfo,
             Message = message,
             Status = "AtAdminOffice",
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         };
 
         _db.RecoveryRecords.Add(recovery);
@@ -1409,7 +1416,7 @@ public class LostFoundService
         var ownerClaim = await _db.ClaimRecords
             .Where(c => c.ReportId == report.ReportId &&
                         c.ClaimedByUserId == report.UserId &&
-                        (c.Status == "Pending" || c.Status == "Approved" || c.Status == "Scheduled"))
+                        (c.Status == "Processing" || c.Status == "Claimed" || c.Status == "Scheduled"))
             .FirstOrDefaultAsync();
 
         if (ownerClaim is null)
@@ -1418,17 +1425,17 @@ public class LostFoundService
             {
                 ReportId = report.ReportId,
                 ClaimedByUserId = report.UserId,
-                ClaimDate = DateTime.UtcNow,
+                ClaimDate = PhNow(),
                 VerificationNotes = message,
-                Status = "Pending",
+                Status = "Processing",
             };
 
             _db.ClaimRecords.Add(ownerClaim);
         }
         else
         {
-            ownerClaim.Status = "Pending";
-            ownerClaim.ClaimDate = DateTime.UtcNow;
+            ownerClaim.Status = "Processing";
+            ownerClaim.ClaimDate = PhNow();
             ownerClaim.VerificationNotes = message;
         }
 
@@ -1443,7 +1450,7 @@ public class LostFoundService
             Message = ownerMessage,
             NotificationType = "MatchFound",
             IsRead = false,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = PhNow(),
         });
 
         await PushAsync(
@@ -1567,14 +1574,15 @@ public class LostFoundService
         {
             TotalReports = await reports.CountAsync(),
             PendingReports = await reports.CountAsync(r => r.Status == "Pending"),
-            ApprovedReports = await reports.CountAsync(r => r.Status == "Approved"),
+            PublishedReports = await reports.CountAsync(r => r.Status == "Published"),
             RejectedReports = await reports.CountAsync(r => r.Status == "Rejected"),
-            ClaimedReports = await reports.CountAsync(r => r.Status == "Claimed"),
+            ReturnedReports = await reports.CountAsync(r =>
+                claims.Any(c => c.ReportId == r.ReportId && c.Status == "Returned")),
             TotalClaims = await claims.CountAsync(),
-            PendingClaims = await claims.CountAsync(c => c.Status == "Pending"),
-            ApprovedClaims = await claims.CountAsync(c => c.Status == "Approved"),
+            ProcessingClaims = await claims.CountAsync(c => c.Status == "Processing"),
+            ClaimedClaims = await claims.CountAsync(c => c.Status == "Claimed"),
             RejectedClaims = await claims.CountAsync(c => c.Status == "Rejected"),
-            CompletedClaims = await claims.CountAsync(c => c.Status == "Completed"),
+            ReturnedClaims = await claims.CountAsync(c => c.Status == "Returned"),
             TotalSchedules = await schedules.CountAsync(),
             ScheduledPickups = await schedules.CountAsync(s => s.Status == "Scheduled"),
             CompletedPickups = await schedules.CountAsync(s => s.Status == "Completed"),
@@ -1693,15 +1701,50 @@ public class LostFoundService
     }
 
     private static bool IsPubliclyVisible(LostFoundReport report) =>
-        IsStatus(report.Status, "Approved") || IsStatus(report.Status, "Found");
+        IsStatus(report.Status, "Published") || IsStatus(report.Status, "Found");
 
     private static bool IsStatus(string? actual, string expected) =>
         string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
+
+    // =========================================================
+    // PHILIPPINE WALL CLOCK
+    //
+    // Every datetime this module stores is a PH wall clock, and the PWA
+    // parses it as local time - so what the admin picks is what the
+    // student sees. PhNow() is NEVER written here: the database
+    // has no time-zone column, so a UTC instant stored raw displays 8
+    // hours early (a 9 AM window shows as 1 AM, "just now" reads as
+    // "8 hours ago"). PH has no daylight saving, so +08:00 is permanent.
+    // =========================================================
+
+    private static DateTime PhNow() => DateTime.SpecifyKind(DateTime.UtcNow.AddHours(8), DateTimeKind.Unspecified);
+
+    /// <summary>
+    /// Incoming datetimes arrive as UTC instants (the PWA sends
+    /// toISOString()). Store the PH wall clock, not the instant.
+    /// </summary>
+    private static DateTime ToPhWallClock(DateTime value)
+    {
+        var utc = value.Kind == DateTimeKind.Utc
+            ? value
+            : value.Kind == DateTimeKind.Local
+                ? value.ToUniversalTime()
+                : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+        return DateTime.SpecifyKind(utc.AddHours(8), DateTimeKind.Unspecified);
+    }
 
     private static DateTime NormalizeDateTime(DateTime value) =>
         DateTime.SpecifyKind(
             new DateTime(value.Year, value.Month, value.Day, value.Hour, value.Minute, 0),
             DateTimeKind.Unspecified);
+
+    /// <summary>
+    /// Availability input: a UTC instant from the PWA, stored as the PH
+    /// wall clock the admin actually picked.
+    /// </summary>
+    private static DateTime NormalizeFutureDateTime(DateTime value) =>
+        ToPhWallClock(NormalizeDateTime(value));
 
     private static string NormalizeName(string? value) =>
         string.IsNullOrWhiteSpace(value)

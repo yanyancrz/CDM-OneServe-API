@@ -9,8 +9,8 @@ namespace CDM_OneServe_API.Controllers.LostFound;
 
 /// <summary>
 /// Claims on found items. A student claims an item they lost;
-/// the finder (or the Lost &amp; Found admin) approves or rejects
-/// it. Approval opens a pickup schedule automatically.
+/// the finder (or the Lost &amp; Found admin) marks it claimed or rejects
+/// it. Claiming opens a pickup schedule automatically.
 /// </summary>
 [ApiController]
 [Route("api/lostfound/claims")]
@@ -56,7 +56,7 @@ public class LostFoundClaimsController : LostFoundControllerBase
         return ToAction(await _service.SubmitClaimAsync(userId, dto));
     }
 
-    /// <summary>The finder (or admin) approves or rejects a claim.</summary>
+    /// <summary>The finder (or admin) marks a claim as claimed or rejects it.</summary>
     [HttpPut("{id:int}/status")]
     public async Task<IActionResult> UpdateClaimStatus(int id, [FromBody] UpdateStatusDto dto)
     {

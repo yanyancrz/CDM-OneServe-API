@@ -31,9 +31,9 @@ public class LostFoundReportsController : LostFoundControllerBase
     }
 
     /// <summary>
-    /// The campus board: approved reports only. A lost report
-    /// whose item was handed over drops off on its own once the
-    /// handover marks it Claimed.
+    /// The campus board: published reports only. A lost report
+    /// whose item was handed over drops off on its own once a
+    /// claim is marked Returned.
     /// </summary>
     [HttpGet]
     [AllowAnonymous]
@@ -45,7 +45,7 @@ public class LostFoundReportsController : LostFoundControllerBase
         return Ok(ApiResponse.Ok(await _service.GetPublicAsync(type, status, search)));
     }
 
-    /// <summary>Six most recent approved found items, for the home screen.</summary>
+    /// <summary>Six most recent published found items, for the home screen.</summary>
     [HttpGet("recent-found")]
     [AllowAnonymous]
     public async Task<IActionResult> GetRecentFound()
@@ -53,7 +53,7 @@ public class LostFoundReportsController : LostFoundControllerBase
         return Ok(ApiResponse.Ok(await _service.GetRecentFoundAsync()));
     }
 
-    /// <summary>Six most recent approved lost items, for the home screen.</summary>
+    /// <summary>Six most recent published lost items, for the home screen.</summary>
     [HttpGet("recent-lost")]
     [AllowAnonymous]
     public async Task<IActionResult> GetRecentLost()
@@ -105,7 +105,7 @@ public class LostFoundReportsController : LostFoundControllerBase
         return ToAction(await _service.UploadImageAsync(file));
     }
 
-    /// <summary>Admin review: approve or reject a pending report.</summary>
+    /// <summary>Admin review: publish or reject a pending report.</summary>
     [HttpPut("{id:int}/status")]
     [Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
     public async Task<IActionResult> UpdateReportStatus(int id, [FromBody] UpdateStatusDto dto)

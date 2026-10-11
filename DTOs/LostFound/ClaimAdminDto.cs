@@ -41,21 +41,21 @@ public class AdminStatsDto
 
     public int PendingReports { get; set; }
 
-    public int ApprovedReports { get; set; }
+    public int PublishedReports { get; set; }
 
     public int RejectedReports { get; set; }
 
-    public int ClaimedReports { get; set; }
+    public int ReturnedReports { get; set; }
 
     public int TotalClaims { get; set; }
 
-    public int PendingClaims { get; set; }
+    public int ProcessingClaims { get; set; }
 
-    public int ApprovedClaims { get; set; }
+    public int ClaimedClaims { get; set; }
 
     public int RejectedClaims { get; set; }
 
-    public int CompletedClaims { get; set; }
+    public int ReturnedClaims { get; set; }
 
     public int TotalSchedules { get; set; }
 

@@ -53,7 +53,7 @@ public class LostFoundAdminController : LostFoundControllerBase
     }
 
     /// <summary>
-    /// Recomputes automatic matches for every approved report. Used once
+    /// Recomputes automatic matches for every published report. Used once
     /// after the feature ships (older approvals predate it) and whenever
     /// the board needs a resync. Confirmed pairs are never rescored.
     /// </summary>
