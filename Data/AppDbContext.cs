@@ -36,6 +36,10 @@ public class AppDbContext : DbContext
     // and the auth path never reads it.
     public DbSet<UserSession> UserSessions { get; set; } = null!;
 
+    // One row per AI answer served. Evaluation data for the research, never
+    // shown in the app except as aggregate counts.
+    public DbSet<AssistantUsage> AssistantUsages { get; set; } = null!;
+
 
     // =========================
     // EXISTING TABLES
@@ -155,6 +159,21 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<UserActivity>()
             .ToTable("user_activities");
+
+
+        // =========================
+        // ASSISTANT USAGE (AI evaluation log)
+        // =========================
+
+        modelBuilder.Entity<AssistantUsage>(e =>
+        {
+            e.ToTable("assistant_usages");
+            e.HasKey(x => x.UsageId);
+            e.Property(x => x.Question).HasMaxLength(300);
+            e.Property(x => x.Source).HasMaxLength(16);
+            e.Property(x => x.Error).HasMaxLength(300);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
 
 
         // =========================

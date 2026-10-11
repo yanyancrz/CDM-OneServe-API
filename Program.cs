@@ -67,6 +67,16 @@ builder.Services.AddScoped<EmailService>();
 
 
 // =====================================================
+// CAMPUS ASSISTANT (Gemini proxy + usage log)
+// The provider key lives in the GEMINI_API_KEY environment variable,
+// never in this repo and never in the browser.
+// =====================================================
+
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<CDM_OneServe_API.Services.Assistant.AssistantService>();
+
+
+// =====================================================
 // LIBRARY SERVICES
 // =====================================================
 
