@@ -8,10 +8,10 @@ using Microsoft.AspNetCore.Mvc;
 namespace CDM_OneServe_API.Controllers.LostFound;
 
 /// <summary>
-/// Recovery reports: "I found your lost item." The finder says
-/// how the handover will happen (directly, or via the Student
-/// Affairs Office), which turns the lost report into a found one
-/// and auto-creates the owner's claim so the pickup flow runs.
+/// Recovery reports: "I found your lost item." The finder hands the item to
+/// the Student Affairs Office, which turns the lost report into a found one
+/// and auto-creates the owner's claim so the pickup flow runs. Keepers
+/// outside the office no longer exist.
 /// </summary>
 [ApiController]
 [Route("api/lostfound/recovery")]

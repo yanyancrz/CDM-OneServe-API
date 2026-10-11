@@ -140,13 +140,10 @@ public class LostFoundService
         if (!isLost && !isFound)
             return LostFoundResult<ReportDto>.BadRequest("Report type must be Lost or Found.");
 
-        // A lost item has no keeper yet; a found item is either with the
-        // finder or already handed to the office.
-        var custody = isLost
-            ? "None"
-            : IsStatus(dto.ItemCustody, "Student") || IsStatus(dto.ItemCustody, "AdminOffice")
-                ? dto.ItemCustody.Trim()
-                : "AdminOffice";
+        // A lost item has no keeper yet; a found item goes straight to the
+        // office - keepers outside the office no longer exist. Every physical
+        // handover runs through the OneServe Student Affairs Office.
+        var custody = isLost ? "None" : "AdminOffice";
 
         var report = new LostFoundReport
         {
@@ -227,6 +224,28 @@ public class LostFoundService
         report.Status = IsStatus(requested, "Approved") ? "Approved" : "Rejected";
 
         await _db.SaveChangesAsync();
+
+        // Approving publishes the report - and publishing recomputes its
+        // matches, so the matches page fills itself. Rejecting retracts it:
+        // unconfirmed pairs involving it are withdrawn.
+        if (IsStatus(report.Status, "Approved"))
+        {
+            await RefreshAutoMatchesAsync(report);
+        }
+        else
+        {
+            var stale = await _db.MatchRecords
+                .Where(m => !m.IsConfirmed &&
+                            (m.LostReportId == report.ReportId || m.FoundReportId == report.ReportId))
+                .ToListAsync();
+
+            if (stale.Count > 0)
+            {
+                _db.MatchRecords.RemoveRange(stale);
+                await _db.SaveChangesAsync();
+            }
+        }
+
         return LostFoundResult<ReportDto>.Ok(ToReportDto(report));
     }
 
@@ -740,24 +759,13 @@ public class LostFoundService
         if (IsStatus(report.Status, "Claimed"))
             return LostFoundResult<BookScheduleResultDto>.BadRequest("This item has already been claimed.");
 
-        var isAdminOffice = IsStatus(report.ItemCustody, "AdminOffice");
-        var isStudent = IsStatus(report.ItemCustody, "Student");
-
-        if (!isAdminOffice && !isStudent)
-            return LostFoundResult<BookScheduleResultDto>.BadRequest("The item's custody is not set correctly.");
-
-        // Who may book: the claimant always; an admin for
-        // office-custody items (the office runs the handover);
-        // the report owner for student-custody items (the
-        // finder still holds the item).
+        // Who may book: the claimant always; an admin (the office runs the
+        // handover). Keepers outside the office no longer exist, so there is
+        // no third case.
         var isAdmin = await IsLostFoundAdminAsync(userId);
-        var isReportOwner = report.UserId == userId;
 
-        if (isAdminOffice && !isClaimant && !isAdmin)
-            return LostFoundResult<BookScheduleResultDto>.Forbidden("Office-custody items are booked by the claimant or through the Student Affairs Office.");
-
-        if (isStudent && !isClaimant && !isReportOwner)
-            return LostFoundResult<BookScheduleResultDto>.Forbidden("Student-custody items are booked by the claimant or the report owner.");
+        if (!isClaimant && !isAdmin)
+            return LostFoundResult<BookScheduleResultDto>.Forbidden("Pickup slots are booked by the claimant or through the Student Affairs Office.");
 
         var availability = await _db.PickupAvailabilities
             .FirstOrDefaultAsync(a => a.IsActive && a.StartDateTime <= selectedSlot && a.EndDateTime >= selectedSlot);
@@ -1043,15 +1051,15 @@ public class LostFoundService
     }
 
     /// <summary>
-    /// Older approved office-custody claims predate the automatic
-    /// schedule, so one is created on read. Cancelled schedules do not
-    /// count: they are replaceable.
+    /// Older approved claims predate the automatic schedule, so one is
+    /// created on read. Cancelled schedules do not count: they are
+    /// replaceable.
     /// </summary>
     private async Task EnsureApprovedAdminOfficeSchedulesAsync()
     {
         var approvedClaims = await _db.ClaimRecords
             .Include(c => c.Report)
-            .Where(c => c.Status == "Approved" && c.Report != null && c.Report.ItemCustody == "AdminOffice")
+            .Where(c => c.Status == "Approved" && c.Report != null)
             .ToListAsync();
 
         var addedAny = false;
@@ -1137,6 +1145,195 @@ public class LostFoundService
             return LostFoundResult<MatchDto>.Forbidden("You can only view matches for your own reports.");
 
         return LostFoundResult<MatchDto>.Ok(ToMatchDto(match));
+    }
+
+    /// <summary>
+    /// Automatic matching: 25 points per dimension (Name, Category,
+    /// Location, Date), stored once per pair. Runs whenever a report is
+    /// approved, so the matches page and the home rail fill themselves -
+    /// nobody has to pair reports by hand.
+    /// </summary>
+    public const int AutoMatchThreshold = 25;
+
+    /// <summary>
+    /// Scores a Lost report against a Found report. Pure function, so the
+    /// same pair always scores the same - the percentage is computed, never
+    /// guessed.
+    /// </summary>
+    public static (int Total, int Name, int Category, int Location, int Date) ComputeMatchScore(
+        string? lostName, string? foundName,
+        string? lostCategory, string? foundCategory,
+        string? lostLocation, string? foundLocation,
+        DateTime lostDate, DateTime foundDate)
+    {
+        // NAME (25): word overlap. "iPhone 11" vs "iphone 11 pro" shares
+        // 2 of 3 words -> 17. Single letters are noise, not signal.
+        var lostTokens = Tokenize(lostName);
+        var foundTokens = Tokenize(foundName);
+
+        int name = 0;
+        if (lostTokens.Count > 0 && foundTokens.Count > 0)
+        {
+            var shared = lostTokens.Intersect(foundTokens).Count();
+            var all = lostTokens.Union(foundTokens).Count();
+            name = all == 0 ? 0 : (int)Math.Round(25.0 * shared / all);
+        }
+
+        // CATEGORY (25): exact, case-insensitive. A phone is never a jacket.
+        var category = string.Equals(
+            (lostCategory ?? "").Trim(), (foundCategory ?? "").Trim(),
+            StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(lostCategory)
+            ? 25 : 0;
+
+        // LOCATION (25/12): same place is strong; one naming the other
+        // ("Clinic" vs "Clinic Room 2") is half. Blank locations score
+        // nothing - missing data must not manufacture a match.
+        var lostLoc = (lostLocation ?? "").Trim();
+        var foundLoc = (foundLocation ?? "").Trim();
+
+        int location = 0;
+        if (lostLoc.Length > 0 && foundLoc.Length > 0)
+        {
+            if (string.Equals(lostLoc, foundLoc, StringComparison.OrdinalIgnoreCase))
+                location = 25;
+            else if (lostLoc.Contains(foundLoc, StringComparison.OrdinalIgnoreCase) ||
+                     foundLoc.Contains(lostLoc, StringComparison.OrdinalIgnoreCase))
+                location = 12;
+        }
+
+        // DATE (25/15/8): same calendar day is strongest; nearby days fade.
+        var days = Math.Abs((lostDate.Date - foundDate.Date).TotalDays);
+
+        int date = days < 1 ? 25 : days <= 3 ? 15 : days <= 7 ? 8 : 0;
+
+        return (name + category + location + date, name, category, location, date);
+    }
+
+    private static HashSet<string> Tokenize(string? value) =>
+        new((value ?? "").ToLowerInvariant()
+            .Split(Array.Empty<char>(), StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(part => part.Split(
+                new[] { ' ', ',', '.', '-', '_', '/', '(', ')', ':', ';', '\'', '"' },
+                StringSplitOptions.RemoveEmptyEntries))
+            .Where(token => token.Length >= 2 && token.Any(char.IsLetterOrDigit)));
+
+    /// <summary>
+    /// Recomputes automatic matches for every approved report. Confirmed
+    /// pairs are never rescored - a human verdict beats the arithmetic.
+    /// </summary>
+    public async Task<int> RecomputeAllAutoMatchesAsync()
+    {
+        var reports = await _db.LostFoundReports
+            .Where(r => r.Status == "Approved")
+            .ToListAsync();
+
+        foreach (var report in reports)
+            await RefreshAutoMatchesAsync(report);
+
+        return reports.Count;
+    }
+
+    /// <summary>
+    /// Recomputes every pair involving this report. New pairs at or above
+    /// the threshold are stored and both owners are notified; confirmed
+    /// pairs are never rescored - a human verdict beats the arithmetic.
+    /// </summary>
+    public async Task RefreshAutoMatchesAsync(LostFoundReport report)
+    {
+        var isLost = IsStatus(report.ReportType, "Lost");
+
+        var candidates = await _db.LostFoundReports
+            .Where(r => r.ReportId != report.ReportId &&
+                        (r.Status == "Approved" || r.Status == "Found") &&
+                        (isLost ? r.ReportType == "Found" : r.ReportType == "Lost"))
+            .ToListAsync();
+
+        foreach (var other in candidates)
+        {
+            var lost = isLost ? report : other;
+            var found = isLost ? other : report;
+
+            var (total, name, category, location, date) = ComputeMatchScore(
+                lost.ItemName, found.ItemName,
+                lost.Category, found.Category,
+                lost.Location, found.Location,
+                lost.DateLostFound, found.DateLostFound);
+
+            var existing = await _db.MatchRecords
+                .FirstOrDefaultAsync(m => m.LostReportId == lost.ReportId &&
+                                          m.FoundReportId == found.ReportId);
+
+            if (existing is not null)
+            {
+                if (existing.IsConfirmed)
+                    continue;
+
+                if (total < AutoMatchThreshold)
+                {
+                    _db.MatchRecords.Remove(existing);
+                    continue;
+                }
+
+                existing.MatchPercentage = total;
+                existing.NameScore = name;
+                existing.CategoryScore = category;
+                existing.LocationScore = location;
+                existing.DateScore = date;
+                continue;
+            }
+
+            if (total < AutoMatchThreshold)
+                continue;
+
+            var match = new MatchRecord
+            {
+                LostReportId = lost.ReportId,
+                FoundReportId = found.ReportId,
+                MatchPercentage = total,
+                NameScore = name,
+                CategoryScore = category,
+                LocationScore = location,
+                DateScore = date,
+                IsConfirmed = false,
+                CreatedAt = DateTime.UtcNow,
+            };
+
+            _db.MatchRecords.Add(match);
+
+            // Both owners hear about it once. The dedupe key is per pair per
+            // user, so a rescore never re-pushes.
+            foreach (var (ownerId, ownerReportId) in new[]
+                     {
+                         (lost.UserId, lost.ReportId),
+                         (found.UserId, found.ReportId),
+                     })
+            {
+                var message =
+                    $"Possible match ({total}%): {lost.ItemName} may be the same as {found.ItemName}.";
+
+                _db.LostFoundNotifications.Add(new Notification
+                {
+                    UserId = ownerId,
+                    ReportId = ownerReportId,
+                    Title = "Possible match found",
+                    Message = message,
+                    NotificationType = "MatchFound",
+                    IsRead = false,
+                    CreatedAt = DateTime.UtcNow,
+                });
+
+                await PushAsync(
+                    ownerId,
+                    "MatchFound",
+                    "Possible match found",
+                    message,
+                    ownerReportId,
+                    $"matchauto:{lost.ReportId}:{found.ReportId}:{ownerId}");
+            }
+        }
+
+        await _db.SaveChangesAsync();
     }
 
     /// <summary>
@@ -1290,10 +1487,11 @@ public class LostFoundService
     }
 
     /// <summary>
-    /// Someone recovered a lost item. The finder says how the handover
-    /// will happen; the report becomes Found, custody moves to the finder
-    /// or the office, and a claim is auto-created for the owner so the
-    /// pickup flow can run.
+    /// Someone recovered a lost item. The item MUST go to the office: the
+    /// finder hands it to the OneServe Student Affairs Office, the report
+    /// becomes Found, and a claim is auto-created for the owner so the
+    /// pickup flow can run. Keeper handovers outside the office no longer
+    /// exist, so no contact details are ever collected or published.
     /// </summary>
     public async Task<LostFoundResult<RecoveryDto>> CreateRecoveryAsync(int userId, CreateRecoveryDto dto)
     {
@@ -1315,30 +1513,16 @@ public class LostFoundService
 
         var recoveryMethod = dto.RecoveryMethod?.Trim() ?? "";
 
-        if (!IsStatus(recoveryMethod, "Student") && !IsStatus(recoveryMethod, "Admin"))
-            return LostFoundResult<RecoveryDto>.BadRequest("Recovery method must be Student or Admin.");
+        if (!IsStatus(recoveryMethod, "Admin"))
+            return LostFoundResult<RecoveryDto>.BadRequest(
+                "A recovered item must be handed to the OneServe Student Affairs Office.");
 
-        var contactMethod = dto.ContactMethod?.Trim() ?? string.Empty;
-        var contactInfo = dto.ContactInfo?.Trim() ?? string.Empty;
         var message = dto.Message?.Trim() ?? string.Empty;
 
-        if (IsStatus(recoveryMethod, "Student"))
-        {
-            if (string.IsNullOrWhiteSpace(contactMethod))
-                return LostFoundResult<RecoveryDto>.BadRequest("Contact method is required when the item is kept by a student.");
-
-            if (string.IsNullOrWhiteSpace(contactInfo))
-                return LostFoundResult<RecoveryDto>.BadRequest("Contact information is required when the item is kept by a student.");
-
-            if (contactInfo.Length > 150)
-                return LostFoundResult<RecoveryDto>.BadRequest("Contact information must not exceed 150 characters.");
-        }
-        else
-        {
-            // Office custody keeps the finder's details out of the open.
-            contactMethod = string.Empty;
-            contactInfo = string.Empty;
-        }
+        // Office custody keeps the finder's details out of the open - contact
+        // fields are always cleared, whatever the client sent.
+        var contactMethod = string.Empty;
+        var contactInfo = string.Empty;
 
         var activeRecovery = await _db.RecoveryRecords
             .AnyAsync(r => r.ReportId == dto.ReportId && r.Status != "Rejected" && r.Status != "Completed");
@@ -1350,19 +1534,19 @@ public class LostFoundService
         {
             ReportId = report.ReportId,
             FinderUserId = userId,
-            RecoveryMethod = IsStatus(recoveryMethod, "Admin") ? "Admin" : "Student",
+            RecoveryMethod = "Admin",
             ContactMethod = contactMethod,
             ContactInfo = contactInfo,
             Message = message,
-            Status = IsStatus(recoveryMethod, "Admin") ? "AtAdminOffice" : "Pending",
+            Status = "AtAdminOffice",
             CreatedAt = DateTime.UtcNow,
         };
 
         _db.RecoveryRecords.Add(recovery);
 
-        // The item is found.
+        // The item is found, at the office.
         report.Status = "Found";
-        report.ItemCustody = IsStatus(recoveryMethod, "Admin") ? "AdminOffice" : "Student";
+        report.ItemCustody = "AdminOffice";
 
         // Auto-create the owner's claim so the pickup flow can run.
         var ownerClaim = await _db.ClaimRecords
@@ -1391,9 +1575,8 @@ public class LostFoundService
             ownerClaim.VerificationNotes = message;
         }
 
-        var ownerMessage = IsStatus(recoveryMethod, "Admin")
-            ? $"Your lost item, {report.ItemName}, was reported as found and given to the {PickupLocation}. Your recovery claim has been created and is awaiting approval."
-            : $"Your lost item, {report.ItemName}, was reported as found by another student. Your recovery claim has been created and is awaiting approval.";
+        var ownerMessage =
+            $"Your lost item, {report.ItemName}, was reported as found and given to the {PickupLocation}. Your recovery claim has been created and is awaiting approval.";
 
         _db.LostFoundNotifications.Add(new Notification
         {
@@ -1737,5 +1920,9 @@ public class LostFoundService
         CreatedAt = m.CreatedAt,
         IsConfirmed = m.IsConfirmed,
         MatchPercentage = m.MatchPercentage,
+        NameScore = m.NameScore,
+        CategoryScore = m.CategoryScore,
+        LocationScore = m.LocationScore,
+        DateScore = m.DateScore,
     };
 }

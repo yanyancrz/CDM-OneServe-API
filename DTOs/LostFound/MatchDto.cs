@@ -21,8 +21,17 @@ public class MatchDto
     public bool IsConfirmed { get; set; }
 
     // =========================================================
-    // MATCH PERCENTAGE
+    // MATCH PERCENTAGE (25 points per dimension: name, category,
+    // location, date)
     // =========================================================
 
     public int MatchPercentage { get; set; }
+
+    public int NameScore { get; set; }
+
+    public int CategoryScore { get; set; }
+
+    public int LocationScore { get; set; }
+
+    public int DateScore { get; set; }
 }

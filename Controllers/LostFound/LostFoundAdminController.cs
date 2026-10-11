@@ -52,6 +52,21 @@ public class LostFoundAdminController : LostFoundControllerBase
         return Ok(ApiResponse.Ok(await _service.GetAllMatchesAsync()));
     }
 
+    /// <summary>
+    /// Recomputes automatic matches for every approved report. Used once
+    /// after the feature ships (older approvals predate it) and whenever
+    /// the board needs a resync. Confirmed pairs are never rescored.
+    /// </summary>
+    [HttpPost("matches/recompute")]
+    public async Task<IActionResult> RecomputeMatches()
+    {
+        var count = await _service.RecomputeAllAutoMatchesAsync();
+
+        // Anonymous object, not a bare int: ApiResponse<T>.Data cannot be a
+        // value type (WhenWritingNull is invalid on one - it 500s).
+        return Ok(ApiResponse.Ok(new { rescanned = count }));
+    }
+
     [HttpGet("availability")]
     public async Task<IActionResult> GetAvailability()
     {

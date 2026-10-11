@@ -12,17 +12,23 @@ public class MatchRecord
     public int FoundReportId { get; set; }
 
     // =========================================================
-    // MATCH PERCENTAGE
+    // MATCH PERCENTAGE (automatic, 25 points per dimension)
     // =========================================================
     //
-    // 100 = very strong match
-    // 50  = partial match
-    // 10  = low possible match
-    //
-    // There is NO minimum percentage required.
+    // Name = word overlap, Category = exact, Location = exact/contains,
+    // Date = same day / within 3 / within 7 days. The four breakdown
+    // columns below make every total explainable.
     // =========================================================
 
     public int MatchPercentage { get; set; }
+
+    public int NameScore { get; set; }
+
+    public int CategoryScore { get; set; }
+
+    public int LocationScore { get; set; }
+
+    public int DateScore { get; set; }
 
     public bool IsConfirmed { get; set; }
 
