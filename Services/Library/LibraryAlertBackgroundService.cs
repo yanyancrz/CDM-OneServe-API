@@ -12,12 +12,13 @@ namespace CDM_OneServe_API.Services.Library;
 /// <summary>
 /// Runs once at startup, then every 6 hours:
 ///   - books due within 1 day -> "due-soon" notification
-///   - books past their due date -> "overdue" notification
+///   - books past their due date -> "overdue" notification, repeated every
+///     third day while the book stays out so the growing fine stays visible
 ///   - reservations expiring within 1 day -> "expiring" notification
 ///
-/// The AlreadyNotified table deduplicates: each book/reservation gets at
-/// most one notification per state transition, so a user is not spammed
-/// on every run.
+/// The deduplication is per event, per reminder, not per book: a reminder
+/// that has already been written for that exact day count is skipped, and
+/// the next one - with its new fine - is allowed through.
 /// </summary>
 public class LibraryAlertBackgroundService : BackgroundService
 {
@@ -155,6 +156,12 @@ public class LibraryAlertBackgroundService : BackgroundService
     // ---------------------------------------------------------
     // OVERDUE: active borrows past their DueDate
     // ---------------------------------------------------------
+    // The first reminder goes out the moment a book is overdue, then once
+    // every ReminderEveryDays while it stays out. A loan that is three weeks
+    // late must not go quiet after one push: the fine keeps growing every
+    // day, and the reminder has to carry the new figure.
+
+    private const int ReminderEveryDays = 3;
 
     private async Task<int> NotifyOverdueBooksAsync(
         AppDbContext db,
@@ -178,26 +185,44 @@ public class LibraryAlertBackgroundService : BackgroundService
             var bookTitle = await GetBookTitleAsync(db, loan.BookId, stoppingToken);
             var dueLabel = loan.DueDate.ToString("MMM dd, yyyy");
 
-            // One reminder per book until it is returned or cleared.
+            var overdueDays = (now - loan.DueDate).Days;
+            var fine = overdueDays * 10;
+
+            // TimeSpan.Days truncates, so a book that went overdue ten hours
+            // ago is "0 days" - that is still the first reminder, and it has
+            // to go out with a zero fine rather than being skipped.
+            var isFirstReminder = overdueDays == 0;
+            var isRepeatReminder = overdueDays > 0 && overdueDays % ReminderEveryDays == 0;
+
+            if (!isFirstReminder && !isRepeatReminder)
+                continue;
+
+            var message =
+                $"Your borrowed book \"{bookTitle}\" is {overdueDays} day(s) overdue (due {dueLabel}). Fine: PHP {fine}. Return it as soon as possible.";
+
+            // Deduplicated by the whole message, not by the book title: the
+            // day count and the fine are part of the text, so each reminder
+            // is its own row while the same one is never written twice.
+            //
+            // The old check (Message.Contains(bookTitle)) answered "was this
+            // book ever overdue?" - which is why a second reminder could
+            // never be sent, and why a book called "Intro" blocked one
+            // called "Introduction".
             var alreadyNotified = await db.LibraryNotifications.AnyAsync(
                 n => n.Type == "overdue"
                      && n.UserId == loan.UserId
-                     && n.Message.Contains(bookTitle),
+                     && n.Message == message,
                 stoppingToken);
 
             if (alreadyNotified)
                 continue;
-
-            var overdueDays = (now - loan.DueDate).Days;
-            var fine = overdueDays * 10;
 
             db.LibraryNotifications.Add(new LibraryNotification
             {
                 UserId = loan.UserId,
                 Type = "overdue",
                 Title = "Book overdue",
-                Message =
-                    $"Your borrowed book \"{bookTitle}\" is {overdueDays} day(s) overdue (due {dueLabel}). Fine: PHP {fine}. Return it as soon as possible.",
+                Message = message,
                 IsRead = false,
                 CreatedAt = DateTime.Now,
             });
@@ -207,9 +232,13 @@ public class LibraryAlertBackgroundService : BackgroundService
                 "Library",
                 "overdue",
                 "Book overdue",
-                $"Your borrowed book \"{bookTitle}\" is {overdueDays} day(s) overdue (due {dueLabel}). Fine: PHP {fine}. Return it as soon as possible.",
+                message,
                 PushRoutes.Resolve("Library", "overdue"),
-                $"overdue:{loan.BorrowId}",
+
+                // The day count is what makes this repeat: the same loan
+                // produces a different key every third day, while OnceOnly
+                // keeps one push per reminder instead of one per run.
+                $"overdue:{loan.BorrowId}:{overdueDays}",
                 OnceOnly: true), stoppingToken);
 
             count++;

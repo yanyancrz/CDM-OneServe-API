@@ -22,6 +22,20 @@ public abstract class MarketplaceControllerBase : ControllerBase
     protected bool TryGetUserId(out int userId) =>
         int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out userId);
 
+    /// <summary>
+    /// The operator session the client is working under, from the
+    /// X-Operator-Session header. Null when absent or malformed - reads cope
+    /// without one, mutations refuse without one.
+    /// </summary>
+    protected Guid? OperatorSession()
+    {
+        var raw = Request.Headers["X-Operator-Session"].ToString().Trim();
+
+        return Guid.TryParse(raw, out var sessionId) && sessionId != Guid.Empty
+            ? sessionId
+            : null;
+    }
+
     protected IActionResult InvalidSession() =>
         Unauthorized(ApiResponse.Fail("Invalid session. Please log in again."));
 

@@ -114,6 +114,11 @@ public class AppDbContext : DbContext
     public DbSet<MarketplaceOrderItem> MarketplaceOrderItems { get; set; } = null!;
     public DbSet<MarketplaceConversation> MarketplaceConversations { get; set; } = null!;
     public DbSet<MarketplaceMessage> MarketplaceMessages { get; set; } = null!;
+    public DbSet<MarketplaceStallLocation> MarketplaceStallLocations { get; set; } = null!;
+    public DbSet<MarketplaceWorkspace> MarketplaceWorkspaces { get; set; } = null!;
+    public DbSet<MarketplaceStallAccount> MarketplaceStallAccounts { get; set; } = null!;
+    public DbSet<MarketplaceOperatorSession> MarketplaceOperatorSessions { get; set; } = null!;
+    public DbSet<MarketplaceInventoryTransaction> MarketplaceInventoryTransactions { get; set; } = null!;
 
     // LOST & FOUND (ported from the standalone FIND system)
     // Uses the existing `users` table for authorship; no FIND users table.
@@ -316,6 +321,9 @@ public class AppDbContext : DbContext
             e.Property(x => x.Category).HasMaxLength(24);
             e.Property(x => x.SubCategory).HasMaxLength(48);
             e.Property(x => x.ImageUrl).HasMaxLength(255);
+            // SetNull: history (orders, audit) outlives a workspace link.
+            e.HasOne(x => x.Workspace).WithMany()
+                .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<MarketplaceProductVariant>(e =>
@@ -353,6 +361,7 @@ public class AppDbContext : DbContext
             // Stored as a fixed 36-char string so the (UserId, key) index is a
             // plain seek.
             e.Property(x => x.IdempotencyKey).HasColumnType("char(36)");
+            e.Property(x => x.RequestKey).HasColumnType("char(36)");
             e.Property(x => x.FulfillmentMethod).HasMaxLength(16);
             e.Property(x => x.RecipientName).HasMaxLength(120);
             e.Property(x => x.ContactNumber).HasMaxLength(30);
@@ -366,6 +375,8 @@ public class AppDbContext : DbContext
             e.HasOne(x => x.CampusLocation).WithMany()
                 .HasForeignKey(x => x.CampusLocationId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Workspace).WithMany()
+                .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.SetNull);
             e.HasMany(x => x.Items).WithOne(x => x.Order)
                 .HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -410,6 +421,70 @@ public class AppDbContext : DbContext
                 .WithMany(x => x.Messages)
                 .HasForeignKey(x => x.ConversationId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MarketplaceStallLocation>(e =>
+        {
+            e.ToTable("marketplace_stall_locations");
+            e.HasKey(x => x.StallLocationId);
+            e.Property(x => x.Name).HasMaxLength(120);
+            e.Property(x => x.Description).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<MarketplaceWorkspace>(e =>
+        {
+            e.ToTable("marketplace_workspaces");
+            e.HasKey(x => x.WorkspaceId);
+            e.Property(x => x.WorkspaceType).HasMaxLength(20);
+            e.Property(x => x.Name).HasMaxLength(120);
+            e.HasOne(x => x.StallLocation).WithMany()
+                .HasForeignKey(x => x.StallLocationId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MarketplaceStallAccount>(e =>
+        {
+            e.ToTable("marketplace_stall_accounts");
+            e.HasKey(x => x.WorkspaceId);
+            e.Property(x => x.WorkspaceId).ValueGeneratedNever();
+            e.HasOne(x => x.Workspace).WithMany()
+                .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Assigner).WithMany()
+                .HasForeignKey(x => x.AssignedBy).OnDelete(DeleteBehavior.SetNull);
+            e.Property(x => x.OperatorName).HasMaxLength(120);
+            e.Property(x => x.IdLast3).HasMaxLength(3).IsFixedLength();
+        });
+
+        modelBuilder.Entity<MarketplaceOperatorSession>(e =>
+        {
+            e.ToTable("marketplace_operator_sessions");
+            e.HasKey(x => x.SessionId);
+            e.Property(x => x.SessionId).HasColumnType("char(36)");
+            e.Property(x => x.OperatorName).HasMaxLength(120);
+            e.Property(x => x.IdLast3).HasMaxLength(3).IsFixedLength();
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Workspace).WithMany()
+                .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MarketplaceInventoryTransaction>(e =>
+        {
+            e.ToTable("marketplace_inventory_transactions");
+            e.HasKey(x => x.TransactionId);
+            e.Property(x => x.OperatorName).HasMaxLength(120);
+            e.Property(x => x.IdLast3).HasMaxLength(3).IsFixedLength();
+            e.Property(x => x.ActionType).HasMaxLength(32);
+            e.Property(x => x.Reason).HasMaxLength(500);
+            e.HasOne(x => x.Product).WithMany()
+                .HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.Variant).WithMany()
+                .HasForeignKey(x => x.VariantId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.Workspace).WithMany()
+                .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Order).WithMany()
+                .HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.SetNull);
         });
 
         // =====================================================

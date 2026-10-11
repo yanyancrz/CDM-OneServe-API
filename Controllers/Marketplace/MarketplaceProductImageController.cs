@@ -30,11 +30,16 @@ public class MarketplaceProductImageController : MarketplaceControllerBase
 {
     private readonly AppDbContext _db;
     private readonly MarketplaceAccessService _access;
+    private readonly MarketplaceOperatorSessionService _sessions;
 
-    public MarketplaceProductImageController(AppDbContext db, MarketplaceAccessService access)
+    public MarketplaceProductImageController(
+        AppDbContext db,
+        MarketplaceAccessService access,
+        MarketplaceOperatorSessionService sessions)
     {
         _db = db;
         _access = access;
+        _sessions = sessions;
     }
 
     /// <summary>
@@ -83,6 +88,19 @@ public class MarketplaceProductImageController : MarketplaceControllerBase
 
         if (product is null)
             return NotFound(new { success = false, message = "Product not found." });
+
+        // Photos belong to the session's workspace, like every other product
+        // write: a stall cannot re-illustrate another stall's menu.
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            userId, OperatorSession(), targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                ApiResponse.Fail(scopeError ?? "Marketplace Staff access required."));
+
+        if (product.WorkspaceId != attribution.WorkspaceId)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                ApiResponse.Fail("That product belongs to another workspace."));
 
         var folder = Path.Combine(
             Directory.GetCurrentDirectory(), "wwwroot", "uploads", "marketplace");
@@ -136,6 +154,19 @@ public class MarketplaceProductImageController : MarketplaceControllerBase
 
         if (product is null)
             return NotFound(new { success = false, message = "Product not found." });
+
+        // Photos belong to the session's workspace, like every other product
+        // write: a stall cannot re-illustrate another stall's menu.
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            userId, OperatorSession(), targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                ApiResponse.Fail(scopeError ?? "Marketplace Staff access required."));
+
+        if (product.WorkspaceId != attribution.WorkspaceId)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                ApiResponse.Fail("That product belongs to another workspace."));
 
         var folder = Path.Combine(
             Directory.GetCurrentDirectory(), "wwwroot", "uploads", "marketplace");

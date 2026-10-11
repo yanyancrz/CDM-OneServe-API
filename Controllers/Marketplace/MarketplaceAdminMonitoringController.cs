@@ -40,11 +40,13 @@ public class MarketplaceAdminMonitoringController : MarketplaceControllerBase
 
     /// <summary>Headline Marketplace numbers for the admin dashboard.</summary>
     [HttpGet("overview")]
-    public async Task<IActionResult> Overview(CancellationToken ct)
+    public async Task<IActionResult> Overview(
+        [FromQuery] int? workspaceId,
+        CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _monitoring.GetOverviewAsync(userId, ct));
+        return ToAction(await _monitoring.GetOverviewAsync(userId, workspaceId, ct));
     }
 
     /// <summary>
@@ -65,7 +67,7 @@ public class MarketplaceAdminMonitoringController : MarketplaceControllerBase
         return ToAction(await _monitoring.ListAccountsAsync(userId, accountType, search, ct));
     }
 
-    /// <summary>Every Marketplace transaction, filterable by status/method/date.</summary>
+    /// <summary>Every Marketplace transaction, filterable by status/method/date/stall.</summary>
     [HttpGet("transactions")]
     public async Task<IActionResult> Transactions(
         [FromQuery] string? status,
@@ -73,22 +75,24 @@ public class MarketplaceAdminMonitoringController : MarketplaceControllerBase
         [FromQuery] string? accountType,
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
+        [FromQuery] int? workspaceId,
         CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
         return ToAction(await _monitoring.ListTransactionsAsync(
-            userId, status, method, accountType, from, to, ct));
+            userId, status, method, accountType, from, to, workspaceId, ct));
     }
 
     /// <summary>Sales over time, by category, by account type, plus best sellers.</summary>
     [HttpGet("analytics")]
     public async Task<IActionResult> Analytics(
         [FromQuery] int days = 30,
+        [FromQuery] int? workspaceId = null,
         CancellationToken ct = default)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _monitoring.GetAnalyticsAsync(userId, days, ct));
+        return ToAction(await _monitoring.GetAnalyticsAsync(userId, days, workspaceId, ct));
     }
 }

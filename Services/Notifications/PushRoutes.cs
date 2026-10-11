@@ -36,6 +36,10 @@ public static class PushRoutes
     public const string LostFoundMatches = "/lost-found/matches";
     public const string LostFoundMyItems = "/lost-found/my-items";
 
+    // ---- Announcements ----
+    /// <summary>Campus announcements are only rendered on the dashboard.</summary>
+    public const string Announcements = Dashboard;
+
     /// <summary>
     /// Maps a module + event to the screen the student should land on.
     /// Unknown events fall back to <see cref="Dashboard"/> - never to an
@@ -100,6 +104,7 @@ public static class PushRoutes
             "library:reservation-cancelled" => LibraryLoans,
             "library:reservation-claimed" => LibraryLoans,
             "library:reservation-expired" => LibraryReserve,
+            "library:reservation-expiring" => LibraryReserve,
             "library:borrow-claim-ready" => LibraryLoans,
             "library:borrow-approved" => LibraryLoans,
             "library:book-returned" => LibraryLoans,
@@ -117,6 +122,11 @@ public static class PushRoutes
             "account:verification-approved" => Dashboard,
             "account:verification-rejected" => Dashboard,
             "account:verification-reupload" => Dashboard,
+
+            // ---------------- Announcements ----------------
+            // Broadcast: every subscribed device, whatever the role.
+            "announcements:announcement-published" => Announcements,
+            "announcements:announcement-updated" => Announcements,
 
             _ => Dashboard,
         };

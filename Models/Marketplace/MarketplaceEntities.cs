@@ -114,6 +114,13 @@ public class MarketplaceProduct
     public string Category { get; set; } = "";
 
     /// <summary>
+    /// The workspace (stall or BusinessHub) that owns this product. Null only
+    /// for rows predating workspaces; every new product is assigned one.
+    /// </summary>
+    public int? WorkspaceId { get; set; }
+    public MarketplaceWorkspace? Workspace { get; set; }
+
+    /// <summary>
     /// Food: Snacks | Drinks. Uniforms: the eight uniform types.
     /// Merchandise: CDM PIN | CDM Lace | CDM Jacket.
     /// </summary>
@@ -217,6 +224,13 @@ public class MarketplaceOrder
 
     public User? User { get; set; }
 
+    /// <summary>
+    /// The workspace that fulfils this order. One order per workspace -
+    /// a checkout spanning stalls produces one order each.
+    /// </summary>
+    public int? WorkspaceId { get; set; }
+    public MarketplaceWorkspace? Workspace { get; set; }
+
     /// <summary>Human readable, e.g. ORD-20261008-0001.</summary>
     public string OrderReference { get; set; } = "";
 
@@ -225,6 +239,13 @@ public class MarketplaceOrder
     /// "Place order" returns the original instead of charging twice.
     /// </summary>
     public Guid IdempotencyKey { get; set; }
+
+    /// <summary>
+    /// The buyer's original checkout key, shared by every order one checkout
+    /// produced. Lets a retried checkout (empty cart, response lost) return the
+    /// original group instead of failing or duplicating.
+    /// </summary>
+    public Guid? RequestKey { get; set; }
 
     /// <summary>
     /// Pickup | CampusDelivery. Deliberately not a generic "Delivery" - campus
@@ -352,5 +373,146 @@ public class MarketplaceMessage
     public int SenderId { get; set; }
     public string Message { get; set; } = "";
     public bool IsRead { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+// ============================================================
+// PER-STALL ACCOUNTS + WORKSPACES (002_stall_workspaces.sql)
+//
+// Every stall has its OWN login account. After signing in with the
+// stall account, the human on duty enters their OPERATOR NAME once;
+// the server-validated operator session carries that name onto every
+// inventory update. The account authenticates, the name attributes.
+// ============================================================
+
+/// <summary>
+/// A FoodHub location (e.g. "Main FoodHub — Old Building Lobby") that
+/// groups stalls. Managed by the Marketplace Head. Distinct from
+/// <see cref="MarketplaceCampusLocation"/>, which are delivery
+/// destinations, not stall groupings.
+/// </summary>
+public class MarketplaceStallLocation
+{
+    public int StallLocationId { get; set; }
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// One operable unit: a food stall, or the CDM BusinessHub workspace.
+/// Products, inventory (via product) and orders each belong to exactly one.
+/// </summary>
+public class MarketplaceWorkspace
+{
+    public int WorkspaceId { get; set; }
+
+    /// <summary>Stall | BusinessHub.</summary>
+    public string WorkspaceType { get; set; } = "Stall";
+
+    public string Name { get; set; } = "";
+
+    /// <summary>Null for the BusinessHub workspace.</summary>
+    public int? StallLocationId { get; set; }
+    public MarketplaceStallLocation? StallLocation { get; set; }
+
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// The login account of one workspace. One row per workspace, one user per
+/// row: a stall account can never operate a different stall, because the
+/// workspace is derived server-side from this link, never from the request.
+/// </summary>
+public class MarketplaceStallAccount
+{
+    public int WorkspaceId { get; set; }
+    public MarketplaceWorkspace? Workspace { get; set; }
+
+    public int UserId { get; set; }
+    public User? User { get; set; }
+
+    public int? AssignedBy { get; set; }
+    public User? Assigner { get; set; }
+
+    public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
+    public bool IsActive { get; set; } = true;
+
+    /// <summary>
+    /// The designated human operator named by the Head when the login was
+    /// created, with the last 3 digits of their ID number. Shown on the
+    /// setup screen with a reminder; matched (not trusted blindly) when a
+    /// shift starts.
+    /// </summary>
+    public string? OperatorName { get; set; }
+    public string? IdLast3 { get; set; }
+}
+
+/// <summary>
+/// The validated context of one duty shift: who signed in (UserId), which
+/// workspace is operated, and the HUMAN name entered after login. Mutations
+/// require an active session; the operator name on audit rows always comes
+/// from here, never from client input.
+/// </summary>
+public class MarketplaceOperatorSession
+{
+    public Guid SessionId { get; set; }
+    public int UserId { get; set; }
+    public User? User { get; set; }
+    public int WorkspaceId { get; set; }
+    public MarketplaceWorkspace? Workspace { get; set; }
+    public string OperatorName { get; set; } = "";
+
+    /// <summary>Last 3 ID digits, attached when the name matches the designated operator.</summary>
+    public string? IdLast3 { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? EndedAt { get; set; }
+}
+
+/// <summary>
+/// One stock movement, append-only. Written by staff updates (with the
+/// session's operator name), by checkout (reservation), by completion
+/// (sale) and by cancellation (release).
+/// </summary>
+public class MarketplaceInventoryTransaction
+{
+    public int TransactionId { get; set; }
+    public int? ProductId { get; set; }
+    public MarketplaceProduct? Product { get; set; }
+    public int? VariantId { get; set; }
+    public MarketplaceProductVariant? Variant { get; set; }
+    public int WorkspaceId { get; set; }
+    public MarketplaceWorkspace? Workspace { get; set; }
+
+    /// <summary>The signed-in account that caused this (stall account, head, buyer...).</summary>
+    public int ActorUserId { get; set; }
+
+    /// <summary>
+    /// The human on duty, from the validated operator session. Null for
+    /// buyer-caused movements (reservations), which have no operator.
+    /// </summary>
+    public string? OperatorName { get; set; }
+
+    /// <summary>Last 3 ID digits, when the session name matched the designated operator.</summary>
+    public string? IdLast3 { get; set; }
+
+    public int PreviousQuantity { get; set; }
+    public int QuantityChanged { get; set; }
+    public int NewQuantity { get; set; }
+
+    /// <summary>
+    /// InitialStock | Restock | Adjustment | Reservation | Sale |
+    /// Cancellation | Damage | Correction.
+    /// </summary>
+    public string ActionType { get; set; } = "";
+
+    public string? Reason { get; set; }
+    public int? OrderId { get; set; }
+    public MarketplaceOrder? Order { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

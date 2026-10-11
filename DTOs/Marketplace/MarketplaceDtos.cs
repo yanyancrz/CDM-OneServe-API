@@ -83,6 +83,12 @@ public class MarketplaceProductDto
     public string ImageUrl { get; set; } = "";
     public bool HasVariants { get; set; }
     public bool IsActive { get; set; }
+
+    /// <summary>The workspace (stall / BusinessHub) that owns this product.</summary>
+    public int? WorkspaceId { get; set; }
+    public string WorkspaceName { get; set; } = "";
+    public string WorkspaceType { get; set; } = "";
+    public string StallLocationName { get; set; } = "";
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
@@ -146,6 +152,14 @@ public class SaveProductRequest
     public bool HasVariants { get; set; }
 
     public bool IsActive { get; set; } = true;
+
+    /// <summary>
+    /// Required when creating a product as an operator WITHOUT a fixed stall
+    /// account (Head, legacy personal staff): which workspace owns it. Stall
+    /// accounts always use their own workspace and must not send this.
+    /// Ignored on update (products never move between workspaces).
+    /// </summary>
+    public int? WorkspaceId { get; set; }
 
     /// <summary>
     /// When supplied, the variant set is replaced wholesale: variants missing
@@ -216,6 +230,10 @@ public class SaveInventoryRequest
 
     [Range(0, int.MaxValue)]
     public int LowStockThreshold { get; set; } = 5;
+
+    /// <summary>Why the count changed (damage, recount...). Shown in the audit trail.</summary>
+    [StringLength(500)]
+    public string Reason { get; set; } = "";
 }
 
 /// <summary>Adding stock. Additive, so a miscount tops up rather than overwrites.</summary>
@@ -223,6 +241,10 @@ public class RestockInventoryRequest
 {
     [Range(1, int.MaxValue)]
     public int Quantity { get; set; }
+
+    /// <summary>Why stock was added. Shown in the audit trail.</summary>
+    [StringLength(500)]
+    public string Reason { get; set; } = "";
 }
 
 // ------------------------------------------------------------
@@ -242,6 +264,10 @@ public class MarketplaceCartItemDto
     public int UnitPriceCentavos { get; set; }
     public int Quantity { get; set; }
     public int SubtotalCentavos { get; set; }
+
+    /// <summary>The stall / BusinessHub selling this line.</summary>
+    public int? WorkspaceId { get; set; }
+    public string WorkspaceName { get; set; } = "";
 
     /// <summary>Stock still available for this exact line.</summary>
     public int AvailableQuantity { get; set; }
@@ -307,6 +333,10 @@ public class MarketplaceOrderDto
     public string Notes { get; set; } = "";
     public string PaymentMethod { get; set; } = "cash";
 
+    /// <summary>The stall / BusinessHub fulfilling this order.</summary>
+    public int? WorkspaceId { get; set; }
+    public string WorkspaceName { get; set; } = "";
+
     public int SubtotalCentavos { get; set; }
     public int DeliveryFeeCentavos { get; set; }
     public int TotalCentavos { get; set; }
@@ -346,6 +376,15 @@ public class MarketplaceOrderItemDto
     public int Quantity { get; set; }
     public int UnitPriceCentavos { get; set; }
     public int SubtotalCentavos { get; set; }
+}
+
+/// <summary>
+/// The answer to one checkout: one order PER workspace, because stalls
+/// fulfil independently. A single-stall cart returns exactly one order.
+/// </summary>
+public class MarketplacePlacedOrdersDto
+{
+    public List<MarketplaceOrderDto> Orders { get; set; } = new();
 }
 
 public class PlaceMarketplaceOrderRequest
@@ -628,6 +667,8 @@ public class MarketplaceTransactionDto
     public int ItemCount { get; set; }
     public int TotalCentavos { get; set; }
     public string Status { get; set; } = "";
+    public int? WorkspaceId { get; set; }
+    public string WorkspaceName { get; set; } = "";
     public string? CampusLocationName { get; set; }
     public string? SpecificLocation { get; set; }
     public string? RecipientName { get; set; }
@@ -711,4 +752,174 @@ public class MarketplaceBestSellerDto
     public string Category { get; set; } = "";
     public int UnitsSold { get; set; }
     public long AmountCentavos { get; set; }
+}
+
+// ------------------------------------------------------------
+// Workspaces, stall accounts, operator sessions, audit
+// ------------------------------------------------------------
+
+/// <summary>A FoodHub location grouping stalls (NOT a delivery destination).</summary>
+public class MarketplaceStallLocationDto
+{
+    public int StallLocationId { get; set; }
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public bool IsActive { get; set; }
+    public int SortOrder { get; set; }
+}
+
+public class SaveStallLocationRequest
+{
+    [Required, StringLength(120, MinimumLength = 2)]
+    public string Name { get; set; } = "";
+
+    [StringLength(500)]
+    public string Description { get; set; } = "";
+
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+/// <summary>One stall or the BusinessHub workspace.</summary>
+public class MarketplaceWorkspaceDto
+{
+    public int WorkspaceId { get; set; }
+
+    /// <summary>Stall | BusinessHub.</summary>
+    public string WorkspaceType { get; set; } = "";
+    public string Name { get; set; } = "";
+    public int? StallLocationId { get; set; }
+    public string StallLocationName { get; set; } = "";
+    public bool IsActive { get; set; }
+    public int SortOrder { get; set; }
+
+    /// <summary>True when this workspace already has a login account.</summary>
+    public bool HasAccount { get; set; }
+    public string AccountEmail { get; set; } = "";
+
+    /// <summary>Designated operator named by the Head (empty when unset).</summary>
+    public string OperatorName { get; set; } = "";
+    public string IdLast3 { get; set; } = "";
+}
+
+public class SaveWorkspaceRequest
+{
+    public int? WorkspaceId { get; set; }
+
+    /// <summary>Stall | BusinessHub. Only the Head sets this.</summary>
+    [Required]
+    public string WorkspaceType { get; set; } = "Stall";
+
+    [Required, StringLength(120, MinimumLength = 2)]
+    public string Name { get; set; } = "";
+
+    /// <summary>Required for Stall, optional site label for BusinessHub.</summary>
+    public int? StallLocationId { get; set; }
+
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+/// <summary>Creates the login account of one workspace (Head only).</summary>
+public class CreateStallAccountRequest
+{
+    /// <summary>
+    /// Which stall gets the login. The setup screen defaults to the card it
+    /// was opened from, but the Head may point it at any workspace that has
+    /// no active account yet.
+    /// </summary>
+    public int WorkspaceId { get; set; }
+
+    [Required, EmailAddress, StringLength(190)]
+    public string Email { get; set; } = "";
+
+    [Required, StringLength(100, MinimumLength = 8)]
+    public string Password { get; set; } = "";
+
+    [Required, StringLength(120, MinimumLength = 2)]
+    public string FullName { get; set; } = "";
+
+    /// <summary>
+    /// The designated human operator: shown on the setup screen with a
+    /// reminder, and matched (not trusted blindly) when a shift starts.
+    /// </summary>
+    [Required, StringLength(120, MinimumLength = 2)]
+    public string OperatorName { get; set; } = "";
+
+    /// <summary>Last 3 digits of the operator's ID number.</summary>
+    [Required, StringLength(3, MinimumLength = 3)]
+    public string IdLast3 { get; set; } = "";
+}
+
+/// <summary>Names (or renames) the designated operator of a stall account.</summary>
+public class SetStallOperatorRequest
+{
+    [Required, StringLength(120, MinimumLength = 2)]
+    public string OperatorName { get; set; } = "";
+
+    [Required, StringLength(3, MinimumLength = 3)]
+    public string IdLast3 { get; set; } = "";
+}
+
+public class ResetStallAccountPasswordRequest
+{
+    [Required, StringLength(100, MinimumLength = 8)]
+    public string Password { get; set; } = "";
+}
+
+/// <summary>Opens a duty shift: the human name behind a stall login.</summary>
+public class StartOperatorSessionRequest
+{
+    /// <summary>
+    /// The real name of the operator on duty. Required, 2-120 chars.
+    /// This is attribution, not a credential.
+    /// </summary>
+    [Required, StringLength(120, MinimumLength = 2)]
+    public string OperatorName { get; set; } = "";
+
+    /// <summary>
+    /// Only for operators WITHOUT a fixed stall account (legacy personal
+    /// staff, Head). Stall accounts operate their own workspace; sending
+    /// another one here is rejected.
+    /// </summary>
+    public int? WorkspaceId { get; set; }
+}
+
+public class MarketplaceOperatorSessionDto
+{
+    public Guid SessionId { get; set; }
+    public int WorkspaceId { get; set; }
+    public string WorkspaceName { get; set; } = "";
+    public string WorkspaceType { get; set; } = "";
+    public string StallLocationName { get; set; } = "";
+    public string OperatorName { get; set; } = "";
+
+    /// <summary>Last 3 ID digits, when the name matched the designated operator.</summary>
+    public string IdLast3 { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+}
+
+/// <summary>One row of the inventory audit trail.</summary>
+public class MarketplaceInventoryTransactionDto
+{
+    public int TransactionId { get; set; }
+    public int? ProductId { get; set; }
+    public string ProductName { get; set; } = "";
+    public int? VariantId { get; set; }
+    public string VariantName { get; set; } = "";
+    public int WorkspaceId { get; set; }
+    public string WorkspaceName { get; set; } = "";
+    public int ActorUserId { get; set; }
+    public string ActorName { get; set; } = "";
+    public string OperatorName { get; set; } = "";
+    public string IdLast3 { get; set; } = "";
+    public int PreviousQuantity { get; set; }
+    public int QuantityChanged { get; set; }
+    public int NewQuantity { get; set; }
+    public string ActionType { get; set; } = "";
+    public string Reason { get; set; } = "";
+    public int? OrderId { get; set; }
+    public string OrderReference { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
 }

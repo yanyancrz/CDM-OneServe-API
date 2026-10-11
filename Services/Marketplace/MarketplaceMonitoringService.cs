@@ -36,6 +36,7 @@ public class MarketplaceMonitoringService
     /// <summary>The Admin's headline Marketplace numbers.</summary>
     public async Task<MarketplaceResult<MarketplaceMonitoringOverviewDto>> GetOverviewAsync(
         int adminId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         if (!await _access.IsAdminAsync(adminId, ct))
@@ -46,7 +47,9 @@ public class MarketplaceMonitoringService
         var week = today.AddDays(-7);
         var month = today.AddDays(-30);
 
-        var orders = await _db.MarketplaceOrders.AsNoTracking().ToListAsync(ct);
+        var orders = await _db.MarketplaceOrders.AsNoTracking()
+            .Where(o => workspaceId == null || o.WorkspaceId == workspaceId)
+            .ToListAsync(ct);
 
         // Sales count completed orders only - a cancelled or unpaid order is not revenue.
         var completed = orders
@@ -178,13 +181,16 @@ public class MarketplaceMonitoringService
         string? accountType,
         DateTime? from,
         DateTime? to,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         if (!await _access.IsAdminAsync(adminId, ct))
             return MarketplaceResult<List<MarketplaceTransactionDto>>.Forbidden(AdminOnly);
 
         var orders = await _db.MarketplaceOrders.AsNoTracking()
+            .Where(o => workspaceId == null || o.WorkspaceId == workspaceId)
             .Include(o => o.CampusLocation)
+            .Include(o => o.Workspace)
             .Include(o => o.Items)
             .OrderByDescending(o => o.CreatedAt)
             .Take(TransactionLimit)
@@ -210,6 +216,8 @@ public class MarketplaceMonitoringService
                 ItemCount = o.Items.Sum(i => i.Quantity),
                 TotalCentavos = o.TotalCentavos,
                 Status = o.Status,
+                WorkspaceId = o.WorkspaceId,
+                WorkspaceName = o.Workspace?.Name ?? "",
                 CampusLocationName = o.CampusLocation?.LocationName,
                 SpecificLocation = o.SpecificLocation,
                 RecipientName = o.RecipientName,
@@ -263,6 +271,7 @@ public class MarketplaceMonitoringService
     public async Task<MarketplaceResult<MarketplaceSalesAnalyticsDto>> GetAnalyticsAsync(
         int adminId,
         int days,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         if (!await _access.IsAdminAsync(adminId, ct))
@@ -272,7 +281,8 @@ public class MarketplaceMonitoringService
         var from = DateTime.UtcNow.Date.AddDays(-(window - 1));
 
         var orders = await _db.MarketplaceOrders.AsNoTracking()
-            .Where(o => o.Status == MarketplaceOrderStatus.Completed && o.CreatedAt >= from)
+            .Where(o => o.Status == MarketplaceOrderStatus.Completed && o.CreatedAt >= from &&
+                        (workspaceId == null || o.WorkspaceId == workspaceId))
             .Include(o => o.Items)
             .ToListAsync(ct);
 

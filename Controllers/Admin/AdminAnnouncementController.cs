@@ -1,6 +1,7 @@
 ﻿using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Admin;
 using CDM_OneServe_API.Models;
+using CDM_OneServe_API.Services.Notifications;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,10 +12,53 @@ namespace CDM_OneServe_API.Controllers.Admin;
 public class AdminAnnouncementController : ControllerBase
 {
     private readonly AppDbContext _context;
+    private readonly IPushDispatcher _push;
 
-    public AdminAnnouncementController(AppDbContext context)
+    public AdminAnnouncementController(
+        AppDbContext context,
+        IPushDispatcher push)
     {
         _context = context;
+        _push = push;
+    }
+
+    /// <summary>
+    /// Broadcasts a campus announcement to every subscribed device.
+    /// Unlike a summons (one user), this fans out from PushSubscriptions,
+    /// so the number of recipients is whatever devices are live right now.
+    /// Never allowed to fail the admin's action.
+    /// </summary>
+    private async Task PushAsync(Announcement announcement, bool published)
+    {
+        try
+        {
+            var (title, body) = PushRoutes.ShapeTitleAndBody(
+                announcement.Title,
+                announcement.Message);
+
+            var dedupeKey = published
+                ? $"announcement-published-{announcement.Id}"
+                : $"announcement-updated-{announcement.Id}";
+
+            await _push.EnqueueBroadcastAsync(
+                new PushNotification(
+                    // Broadcast ignores UserId: the recipient set is
+                    // "everyone with an active subscription".
+                    UserId: 0,
+                    Module: "Announcements",
+                    Type: published ? "announcement-published" : "announcement-updated",
+                    Title: $"{announcement.Tag} · {title}",
+                    Body: body,
+                    TargetUrl: PushRoutes.Announcements,
+                    DedupeKey: dedupeKey,
+                    Tag: $"oneserve-announcement-{announcement.Id}",
+                    Priority: published ? (byte)2 : (byte)5),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Announcement push failed: {ex.Message}");
+        }
     }
 
     // =========================================================
@@ -124,6 +168,13 @@ public class AdminAnnouncementController : ControllerBase
 
         await _context.SaveChangesAsync();
 
+        // Published with the notify switch on: tell every subscribed
+        // device a new campus announcement is live.
+        if (announcement.IsActive && request.NotifyUsers)
+        {
+            await PushAsync(announcement, published: true);
+        }
+
         return Ok(announcement);
     }
 
@@ -183,6 +234,8 @@ public class AdminAnnouncementController : ControllerBase
             });
         }
 
+        var wasActive = announcement.IsActive;
+
         announcement.Title =
             request.Title.Trim();
 
@@ -205,6 +258,14 @@ public class AdminAnnouncementController : ControllerBase
             DateTime.Now;
 
         await _context.SaveChangesAsync();
+
+        // The switch on the card is the only Publish button, so a hidden
+        // announcement turned on from the list must also notify. Editing
+        // one that is already live stays quiet.
+        if (request.IsActive && request.NotifyUsers)
+        {
+            await PushAsync(announcement, published: !wasActive);
+        }
 
         return Ok(announcement);
     }

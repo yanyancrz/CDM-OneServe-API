@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Marketplace;
@@ -31,6 +33,8 @@ public class MarketplaceOrderService
     private readonly MarketplaceAccessService _access;
     private readonly MarketplaceInventoryService _inventory;
     private readonly MarketplaceCatalogService _catalog;
+    private readonly MarketplaceOperatorSessionService _sessions;
+    private readonly MarketplaceAuditService _audit;
     private readonly IPushDispatcher _push;
 
     public MarketplaceOrderService(
@@ -38,12 +42,16 @@ public class MarketplaceOrderService
         MarketplaceAccessService access,
         MarketplaceInventoryService inventory,
         MarketplaceCatalogService catalog,
+        MarketplaceOperatorSessionService sessions,
+        MarketplaceAuditService audit,
         IPushDispatcher push)
     {
         _db = db;
         _access = access;
         _inventory = inventory;
         _catalog = catalog;
+        _sessions = sessions;
+        _audit = audit;
         _push = push;
     }
 
@@ -81,60 +89,101 @@ public class MarketplaceOrderService
         }
     }
 
-    /// <summary>Everyone on the Marketplace staff roster, heads included.</summary>
-    private async Task<List<int>> ActiveStaffUserIdsAsync(CancellationToken ct) =>
-        await _db.MarketplaceStaff.AsNoTracking()
-            .Where(s => s.IsActive)
-            .Select(s => s.UserId)
-            .Distinct()
+    /// <summary>
+    /// Staff recipients for one workspace: its stall account(s), floating
+    /// operators (legacy personal staff with no fixed stall), plus heads.
+    /// </summary>
+    private async Task<List<int>> ActiveWorkspaceStaffUserIdsAsync(
+        int workspaceId, CancellationToken ct)
+    {
+        var stallUsers = await _db.MarketplaceStallAccounts.AsNoTracking()
+            .Where(a => a.WorkspaceId == workspaceId && a.IsActive)
+            .Select(a => a.UserId)
             .ToListAsync(ct);
+
+        var linkedUserIds = await _db.MarketplaceStallAccounts.AsNoTracking()
+            .Where(a => a.IsActive)
+            .Select(a => a.UserId)
+            .ToListAsync(ct);
+
+        var floating = await _db.MarketplaceStaff.AsNoTracking()
+            .Where(s => s.IsActive && !linkedUserIds.Contains(s.UserId))
+            .Select(s => s.UserId)
+            .ToListAsync(ct);
+
+        var heads = await _db.Users.AsNoTracking()
+            .Where(u => u.AccountStatus == "Active" &&
+                        u.Role == MarketplaceAccessService.HeadRole &&
+                        u.AdminModule == MarketplaceAccessService.HeadModule)
+            .Select(u => u.Id)
+            .ToListAsync(ct);
+
+        return stallUsers.Concat(floating).Concat(heads).Distinct().ToList();
+    }
 
     // ==========================================================
     // BUYER
     // ==========================================================
 
     /// <summary>
-    /// Turns the buyer's cart into one order and reserves the stock.
+    /// Turns the buyer's cart into ONE ORDER PER WORKSPACE and reserves stock.
+    ///
+    /// Stalls fulfil independently, so a cart spanning Stall 1 and the
+    /// BusinessHub becomes two orders with two references. A single-stall
+    /// cart returns exactly one order, as before.
     ///
     /// Everything money-related is re-derived here, never taken from the client:
     /// unit prices come from the product rows, and the delivery fee comes from
     /// marketplace_settings (staff-configured, never hardcoded, and always 0 for
-    /// Pickup).
+    /// Pickup). A multi-stall delivery checkout carries the fee once per order,
+    /// because each stall delivers on its own.
     /// </summary>
-    public async Task<MarketplaceResult<MarketplaceOrderDto>> PlaceOrderAsync(
+    public async Task<MarketplaceResult<MarketplacePlacedOrdersDto>> PlaceOrderAsync(
         int userId,
         PlaceMarketplaceOrderRequest request,
         CancellationToken ct = default)
     {
         var buyer = await _access.RequireBuyerAsync(userId, ct);
-        if (buyer.Actor is null) return MarketplaceAccessService.BuyerRefusal<MarketplaceOrderDto>(buyer);
-
-        // ---------------------------------------------------------------
-        // IDEMPOTENCY FIRST, before anything else is validated.
-        //
-        // This must come before the cart is read. Placing an order empties the
-        // cart, so a retried request - the classic double-tap, or a network
-        // timeout where the response never arrived - would otherwise come back
-        // as "Your cart is empty" and the buyer would reasonably conclude the
-        // order failed. With the lookup first, the retry returns the ORIGINAL
-        // order and there is still exactly one order.
-        // ---------------------------------------------------------------
+        if (buyer.Actor is null) return MarketplaceAccessService.BuyerRefusal<MarketplacePlacedOrdersDto>(buyer);
 
         var requestKey = request.RequestKey == Guid.Empty ? Guid.NewGuid() : request.RequestKey;
 
-        var existing = await _db.MarketplaceOrders
-            .Include(o => o.CampusLocation)
-            .Include(o => o.Items)
-            .FirstOrDefaultAsync(o => o.UserId == userId && o.IdempotencyKey == requestKey, ct);
+        // ---------------------------------------------------------------
+        // IDEMPOTENCY FIRST, before the cart is read.
+        //
+        // Placing an order empties the cart, so a retried checkout - the
+        // classic double-tap, or a timeout where the response never arrived -
+        // would otherwise come back as "Your cart is empty". Every order one
+        // checkout produced carries the original key, so the retry returns
+        // the ORIGINAL group and there is still exactly one order per stall.
+        // ---------------------------------------------------------------
 
-        if (existing is not null)
-            return MarketplaceResult<MarketplaceOrderDto>.Ok(ToDto(existing, buyer.Actor.User));
+        if (request.RequestKey != Guid.Empty)
+        {
+            var replayed = await _db.MarketplaceOrders
+                .Where(o => o.UserId == userId && o.RequestKey == request.RequestKey)
+                .Include(o => o.CampusLocation)
+                .Include(o => o.Workspace)
+                .Include(o => o.Items)
+                .OrderBy(o => o.OrderId)
+                .ToListAsync(ct);
+
+            if (replayed.Count > 0)
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.Ok(
+                    new MarketplacePlacedOrdersDto
+                    {
+                        Orders = replayed.Select(o => ToDto(o, buyer.Actor.User)).ToList()
+                    },
+                    replayed.Count > 1
+                        ? $"{replayed.Count} orders placed - one per stall."
+                        : "Order placed.");
+        }
 
         var method = MarketplaceFulfillment.Normalize(request.FulfillmentMethod);
         var paymentMethod = string.IsNullOrWhiteSpace(request.PaymentMethod) ? "cash" : request.PaymentMethod;
 
         if (paymentMethod is not ("cash" or "online"))
-            return MarketplaceResult<MarketplaceOrderDto>.BadRequest("Choose a valid payment method.");
+            return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest("Choose a valid payment method.");
 
         // ----- the cart -----
         var cart = await _db.MarketplaceCartItems
@@ -143,7 +192,7 @@ public class MarketplaceOrderService
             .ToListAsync(ct);
 
         if (cart.Count == 0)
-            return MarketplaceResult<MarketplaceOrderDto>.BadRequest("Your cart is empty.");
+            return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest("Your cart is empty.");
 
         var productIds = cart.Select(c => c.ProductId).Distinct().ToList();
         var variantIds = cart.Where(c => c.VariantId.HasValue).Select(c => c.VariantId!.Value).ToList();
@@ -152,18 +201,36 @@ public class MarketplaceOrderService
             .Where(p => productIds.Contains(p.ProductId))
             .ToDictionaryAsync(p => p.ProductId, ct);
 
+        var neededWorkspaceIds = products.Values
+            .Where(p => p.WorkspaceId.HasValue)
+            .Select(p => p.WorkspaceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var workspaces = await _db.MarketplaceWorkspaces.AsNoTracking()
+            .Where(w => neededWorkspaceIds.Contains(w.WorkspaceId))
+            .ToDictionaryAsync(w => w.WorkspaceId, ct);
+
         var variants = await _db.MarketplaceProductVariants
             .Where(v => variantIds.Contains(v.VariantId))
             .ToDictionaryAsync(v => v.VariantId, ct);
 
         // ----- validate every line and price it from the database -----
-        var lines = new List<(MarketplaceCartItem Cart, string Name, string VariantName, int Unit, int Subtotal)>();
+        var lines = new List<(MarketplaceCartItem Cart, string Name, string VariantName, int Unit, int Subtotal, int WorkspaceId)>();
 
         foreach (var item in cart)
         {
             if (!products.TryGetValue(item.ProductId, out var product) || !product.IsActive)
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
                     $"\"{(item.ProductId)}\" is no longer available. Refresh your cart.");
+
+            // Every product belongs to a workspace, and an inactive stall
+            // sells nothing - even though its rows stay for history.
+            if (!product.WorkspaceId.HasValue ||
+                !workspaces.TryGetValue(product.WorkspaceId.Value, out var workspace) ||
+                !workspace.IsActive)
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
+                    $"\"{product.Name}\" is not available right now. Refresh your cart.");
 
             var unit = product.PriceCentavos;
             var variantName = "";
@@ -171,7 +238,7 @@ public class MarketplaceOrderService
             if (item.VariantId is int variantId)
             {
                 if (!variants.TryGetValue(variantId, out var variant) || !variant.IsActive)
-                    return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                    return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
                         "A selected size is no longer available. Refresh your cart.");
 
                 unit += variant.PriceAdjustmentCentavos;
@@ -179,14 +246,12 @@ public class MarketplaceOrderService
             }
             else if (product.HasVariants)
             {
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
                     $"Choose a size for \"{product.Name}\".");
             }
 
-            lines.Add((item, product.Name, variantName, unit, unit * item.Quantity));
+            lines.Add((item, product.Name, variantName, unit, unit * item.Quantity, product.WorkspaceId!.Value));
         }
-
-        var subtotal = lines.Sum(l => l.Subtotal);
 
         // ----- campus delivery: location required, fee from settings -----
         var settings = await _catalog.LoadSettingsAsync(ct);
@@ -195,7 +260,7 @@ public class MarketplaceOrderService
         if (method == MarketplaceFulfillment.CampusDelivery)
         {
             if (!settings.DeliveryEnabled)
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
                     "Campus Delivery is not available right now. Please choose Pick Up.");
 
             var recipient = (request.RecipientName ?? "").Trim();
@@ -203,13 +268,13 @@ public class MarketplaceOrderService
             var details = (request.SpecificLocation ?? "").Trim();
 
             if (recipient.Length < 2)
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest("Enter the recipient name.");
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest("Enter the recipient name.");
 
             if (contact.Length < 7)
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest("Enter a contact number.");
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest("Enter a contact number.");
 
             if (request.CampusLocationId is not int locationId)
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
                     "Choose an approved campus location.");
 
             // The location must exist AND be active. This is what stops a buyer
@@ -218,128 +283,212 @@ public class MarketplaceOrderService
                 .FirstOrDefaultAsync(l => l.LocationId == locationId && l.IsActive, ct);
 
             if (location is null)
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
                     "That campus location is not available.");
 
             if (location.AllowsDetails && details.Length < 2)
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
                     $"Add the specific room, office or area within {location.LocationName}.");
 
             deliveryFee = settings.DeliveryFeeCentavos;
         }
 
-        var total = subtotal + deliveryFee;
+        // ----- one order per workspace -----
+        //
+        // IDEMPOTENCY PER GROUP, before anything is written. Retries (double-tap,
+        // timeout with no response) return the ORIGINAL group orders: groups
+        // already placed are collected, only missing ones are created. The group
+        // key is derived deterministically from the client's key, so a retry
+        // with the same key replays the same groups.
+        var placedOrders = new List<MarketplaceOrder>();
+        var createdThisCall = new List<MarketplaceOrder>();
 
-        // ----- everything below is one atomic unit -----
-        var order = new MarketplaceOrder
-        {
-            UserId = userId,
-            IdempotencyKey = requestKey,
-            FulfillmentMethod = method,
-            PaymentMethod = paymentMethod,
-            Status = MarketplaceOrderStatus.Pending,
-            PaymentStatus = "unpaid",
-            SubtotalCentavos = subtotal,
-            DeliveryFeeCentavos = deliveryFee,
-            TotalCentavos = total,
-            Notes = (request.Notes ?? "").Trim(),
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
+        var groups = lines
+            .GroupBy(l => l.WorkspaceId)
+            .OrderBy(g => g.Key)
+            .ToList();
 
-        if (method == MarketplaceFulfillment.CampusDelivery)
+        foreach (var group in groups)
         {
-            order.RecipientName = (request.RecipientName ?? "").Trim();
-            order.ContactNumber = (request.ContactNumber ?? "").Trim();
-            order.CampusLocationId = request.CampusLocationId;
-            order.SpecificLocation = (request.SpecificLocation ?? "").Trim();
-            order.DeliveryInstructions = (request.DeliveryInstructions ?? "").Trim();
-        }
+            var groupKey = GroupIdempotencyKey(requestKey, group.Key);
 
-        foreach (var (cartItem, name, variantName, unit, lineSubtotal) in lines)
-        {
-            order.Items.Add(new MarketplaceOrderItem
+            var replay = await _db.MarketplaceOrders
+                .Where(o => o.UserId == userId && o.IdempotencyKey == groupKey)
+                .Include(o => o.Items)
+                .FirstOrDefaultAsync(ct);
+
+            if (replay is not null)
             {
-                ProductId = cartItem.ProductId,
-                VariantId = cartItem.VariantId,
-                // Snapshots: the history stays accurate after a rename or reprice.
-                ProductName = name,
-                VariantName = variantName,
-                Quantity = cartItem.Quantity,
-                UnitPriceCentavos = unit,
-                SubtotalCentavos = lineSubtotal
-            });
-        }
+                placedOrders.Add(replay);
+                continue;
+            }
 
-        // The reference is allocated BEFORE the row is inserted, so the order is
-        // written exactly once with its final reference. See NextReferenceAsync
-        // for why the order of these two statements matters.
-        order.OrderReference = await NextReferenceAsync(order.CreatedAt, ct);
+            var groupSubtotal = group.Sum(l => l.Subtotal);
 
-        _db.MarketplaceOrders.Add(order);
-        await _db.SaveChangesAsync(ct);
-
-        // ----- reserve stock, aborting the whole order if anything runs short -----
-        var reserved = new List<(int ProductId, int? VariantId, int Quantity)>();
-
-        foreach (var (cartItem, _, _, _, _) in lines)
-        {
-            var ok = await _inventory.TryReserveAsync(
-                cartItem.ProductId, cartItem.VariantId, cartItem.Quantity, ct);
-
-            if (!ok)
+            // ----- everything below is one atomic unit -----
+            var order = new MarketplaceOrder
             {
-                // Put back everything already taken, then drop the order. The
-                // buyer keeps their cart untouched so they can adjust and retry.
+                UserId = userId,
+                WorkspaceId = group.Key,
+                IdempotencyKey = groupKey,
+                RequestKey = request.RequestKey == Guid.Empty ? null : request.RequestKey,
+                FulfillmentMethod = method,
+                PaymentMethod = paymentMethod,
+                Status = MarketplaceOrderStatus.Pending,
+                PaymentStatus = "unpaid",
+                SubtotalCentavos = groupSubtotal,
+                DeliveryFeeCentavos = deliveryFee,
+                TotalCentavos = groupSubtotal + deliveryFee,
+                Notes = (request.Notes ?? "").Trim(),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            if (method == MarketplaceFulfillment.CampusDelivery)
+            {
+                order.RecipientName = (request.RecipientName ?? "").Trim();
+                order.ContactNumber = (request.ContactNumber ?? "").Trim();
+                order.CampusLocationId = request.CampusLocationId;
+                order.SpecificLocation = (request.SpecificLocation ?? "").Trim();
+                order.DeliveryInstructions = (request.DeliveryInstructions ?? "").Trim();
+            }
+
+            foreach (var (cartItem, name, variantName, unit, lineSubtotal, _) in group)
+            {
+                order.Items.Add(new MarketplaceOrderItem
+                {
+                    ProductId = cartItem.ProductId,
+                    VariantId = cartItem.VariantId,
+                    // Snapshots: the history stays accurate after a rename or reprice.
+                    ProductName = name,
+                    VariantName = variantName,
+                    Quantity = cartItem.Quantity,
+                    UnitPriceCentavos = unit,
+                    SubtotalCentavos = lineSubtotal
+                });
+            }
+
+            // The reference is allocated BEFORE the row is inserted, so the order is
+            // written exactly once with its final reference. See NextReferenceAsync
+            // for why the order of these two statements matters.
+            order.OrderReference = await NextReferenceAsync(order.CreatedAt, ct);
+
+            _db.MarketplaceOrders.Add(order);
+            await _db.SaveChangesAsync(ct);
+
+            // ----- reserve stock, aborting everything if anything runs short -----
+            var reserved = new List<(int ProductId, int? VariantId, int Quantity)>();
+            var shortProduct = "";
+
+            foreach (var (cartItem, _, _, _, _, _) in group)
+            {
+                var audit = new MarketplaceStockAudit(
+                    group.Key, userId, OperatorName: null, IdLast3: null, order.OrderId, Reason: null);
+
+                var ok = await _inventory.TryReserveAsync(
+                    cartItem.ProductId, cartItem.VariantId, cartItem.Quantity, audit, ct);
+
+                if (!ok)
+                {
+                    shortProduct = products[cartItem.ProductId].Name;
+                    break;
+                }
+
+                reserved.Add((cartItem.ProductId, cartItem.VariantId, cartItem.Quantity));
+            }
+
+            if (shortProduct.Length > 0)
+            {
+                // Put back this group's takes, then roll back EVERY group this
+                // call created (replayed groups from an earlier call are left
+                // alone). The buyer keeps their cart untouched.
                 foreach (var (productId, variantId, quantity) in reserved)
-                    await _inventory.ReleaseAsync(productId, variantId, quantity, ct);
+                    await _inventory.ReleaseAsync(productId, variantId, quantity, null, ct);
+
+                foreach (var created in createdThisCall)
+                {
+                    foreach (var item in created.Items)
+                    {
+                        if (item.ProductId is not int productId) continue;
+                        await _inventory.ReleaseAsync(
+                            productId, item.VariantId, item.Quantity, null, ct);
+                    }
+
+                    _db.MarketplaceOrders.Remove(created);
+                }
 
                 _db.MarketplaceOrders.Remove(order);
                 await _db.SaveChangesAsync(ct);
 
-                return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
-                    $"\"{products[cartItem.ProductId].Name}\" just sold out. " +
-                    "Please review your cart.");
+                return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
+                    $"\"{shortProduct}\" just sold out. Please review your cart.");
             }
 
-            reserved.Add((cartItem.ProductId, cartItem.VariantId, cartItem.Quantity));
+            placedOrders.Add(order);
+            createdThisCall.Add(order);
         }
 
-        // ----- the cart has become an order -----
+        // ----- the cart has become order(s) -----
         _db.MarketplaceCartItems.RemoveRange(cart);
         await _db.SaveChangesAsync(ct);
 
+        var orderedIds = placedOrders.Select(o => o.OrderId).ToList();
+
         var placed = await _db.MarketplaceOrders
+            .Where(o => orderedIds.Contains(o.OrderId))
             .Include(o => o.CampusLocation)
+            .Include(o => o.Workspace)
             .Include(o => o.Items)
-            .FirstAsync(o => o.OrderId == order.OrderId, ct);
+            .OrderBy(o => o.OrderId)
+            .ToListAsync(ct);
 
-        // Buyer: "we got it."
-        await PushOrderAsync(
-            order.UserId,
-            "order-status",
-            "Order placed",
-            $"Order {order.OrderReference} was placed. We will notify you when it is ready.",
-            $"orderplaced:{order.OrderId}",
-            ct);
-
-        // Staff: a new order is waiting.
-        var staffIds = await ActiveStaffUserIdsAsync(ct);
-        foreach (var staffId in staffIds)
+        foreach (var order in placed)
         {
-            if (staffId == order.UserId) continue;
-
+            // Buyer: "we got it."
             await PushOrderAsync(
-                staffId,
-                "order-placed",
-                "New Marketplace order",
-                $"{order.OrderReference} was just placed ({MarketplaceFulfillment.Label(order.FulfillmentMethod)}).",
-                $"neworder:{order.OrderId}:{staffId}",
+                order.UserId,
+                "order-status",
+                "Order placed",
+                $"Order {order.OrderReference} was placed. We will notify you when it is ready.",
+                $"orderplaced:{order.OrderId}",
                 ct);
+
+            // The stall that fulfils it: a new order is waiting.
+            var staffIds = await ActiveWorkspaceStaffUserIdsAsync(order.WorkspaceId ?? 0, ct);
+            foreach (var staffId in staffIds)
+            {
+                if (staffId == order.UserId) continue;
+
+                await PushOrderAsync(
+                    staffId,
+                    "order-placed",
+                    "New Marketplace order",
+                    $"{order.OrderReference} was just placed ({MarketplaceFulfillment.Label(order.FulfillmentMethod)}).",
+                    $"neworder:{order.OrderId}:{staffId}",
+                    ct);
+            }
         }
 
-        return MarketplaceResult<MarketplaceOrderDto>.Ok(
-            ToDto(placed, buyer.Actor.User), "Order placed.");
+        return MarketplaceResult<MarketplacePlacedOrdersDto>.Ok(
+            new MarketplacePlacedOrdersDto
+            {
+                Orders = placed.Select(o => ToDto(o, buyer.Actor.User)).ToList()
+            },
+            placed.Count > 1
+                ? $"{placed.Count} orders placed - one per stall."
+                : "Order placed.");
+    }
+
+    /// <summary>
+    /// Deterministic per-workspace idempotency key, so a retried checkout
+    /// replays the same group orders instead of duplicating them.
+    /// </summary>
+    private static Guid GroupIdempotencyKey(Guid requestKey, int workspaceId)
+    {
+        var bytes = MD5.HashData(
+            Encoding.UTF8.GetBytes($"{requestKey:N}:{workspaceId}"));
+
+        return new Guid(bytes);
     }
 
     /// <summary>The buyer's own orders, newest first. Never anybody else's.</summary>
@@ -353,6 +502,7 @@ public class MarketplaceOrderService
         var orders = await _db.MarketplaceOrders.AsNoTracking()
             .Where(o => o.UserId == userId)
             .Include(o => o.CampusLocation)
+            .Include(o => o.Workspace)
             .Include(o => o.Items)
             .OrderByDescending(o => o.CreatedAt)
             .ThenByDescending(o => o.OrderId)
@@ -378,6 +528,7 @@ public class MarketplaceOrderService
         var order = await _db.MarketplaceOrders.AsNoTracking()
             .Where(o => o.OrderId == orderId && o.UserId == userId)
             .Include(o => o.CampusLocation)
+            .Include(o => o.Workspace)
             .Include(o => o.Items)
             .FirstOrDefaultAsync(ct);
 
@@ -415,7 +566,8 @@ public class MarketplaceOrderService
             return MarketplaceResult<object>.BadRequest(
                 "This order can no longer be cancelled. Please contact Marketplace Staff.");
 
-        await ApplyCancellationAsync(order, (request.Reason ?? "").Trim(), ct);
+        await ApplyCancellationAsync(
+            order, (request.Reason ?? "").Trim(), userId, operatorName: null, idLast3: null, ct);
 
         return MarketplaceResult<object>.Ok(new { }, "Order cancelled.");
     }
@@ -428,6 +580,9 @@ public class MarketplaceOrderService
     /// Every order, for the Staff Orders / Campus Deliveries / Transactions
     /// screens. Pickup and CampusDelivery rows sit in the same list - the
     /// Fulfillment column is what separates them.
+    ///
+    /// Stall accounts see their own workspace only. Floating operators see
+    /// their session workspace, or everything when browsing without one.
     /// </summary>
     public async Task<MarketplaceResult<List<MarketplaceOrderDto>>> ListForStaffAsync(
         int staffId,
@@ -436,13 +591,23 @@ public class MarketplaceOrderService
         string? search,
         DateTime? from,
         DateTime? to,
+        Guid? sessionId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         var actor = await _access.GetOperatorAsync(staffId, ct);
         if (actor is null) return MarketplaceResult<List<MarketplaceOrderDto>>.Forbidden(StaffOnly);
 
+        var (scope, scopeError) = await _sessions.ResolveReadScopeAsync(
+            staffId, sessionId, workspaceId, ct);
+
+        if (scopeError is not null)
+            return MarketplaceResult<List<MarketplaceOrderDto>>.Forbidden(scopeError);
+
         var orders = await _db.MarketplaceOrders.AsNoTracking()
+            .Where(o => scope == null || o.WorkspaceId == scope)
             .Include(o => o.CampusLocation)
+            .Include(o => o.Workspace)
             .Include(o => o.Items)
             .OrderByDescending(o => o.CreatedAt)
             .ThenByDescending(o => o.OrderId)
@@ -488,9 +653,13 @@ public class MarketplaceOrderService
     public async Task<MarketplaceResult<List<MarketplaceOrderDto>>> ListDeliveriesAsync(
         int staffId,
         string? status,
+        Guid? sessionId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
-        var all = await ListForStaffAsync(staffId, status, MarketplaceFulfillment.CampusDelivery, null, null, null, ct);
+        var all = await ListForStaffAsync(
+            staffId, status, MarketplaceFulfillment.CampusDelivery, null, null, null,
+            sessionId, workspaceId, ct);
         if (!all.Success) return all;
 
         return MarketplaceResult<List<MarketplaceOrderDto>>.Ok(all.Data!
@@ -501,14 +670,23 @@ public class MarketplaceOrderService
     public async Task<MarketplaceResult<MarketplaceOrderDto>> GetForStaffAsync(
         int staffId,
         int orderId,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
         var actor = await _access.GetOperatorAsync(staffId, ct);
         if (actor is null) return MarketplaceResult<MarketplaceOrderDto>.Forbidden(StaffOnly);
 
+        var (scope, scopeError) = await _sessions.ResolveReadScopeAsync(
+            staffId, sessionId, requestedWorkspaceId: null, ct);
+
+        if (scopeError is not null)
+            return MarketplaceResult<MarketplaceOrderDto>.Forbidden(scopeError);
+
         var order = await _db.MarketplaceOrders.AsNoTracking()
-            .Where(o => o.OrderId == orderId)
+            .Where(o => o.OrderId == orderId &&
+                        (scope == null || o.WorkspaceId == scope))
             .Include(o => o.CampusLocation)
+            .Include(o => o.Workspace)
             .Include(o => o.Items)
             .FirstOrDefaultAsync(ct);
 
@@ -525,15 +703,23 @@ public class MarketplaceOrderService
     /// The next status is computed here, never taken from the request, so a Pick
     /// Up order can never be pushed down the delivery path and vice versa, and a
     /// staff member cannot skip a step.
+    ///
+    /// Requires an operator session: the entered name is recorded on the
+    /// completion's stock movement, and the order must belong to the
+    /// session's workspace.
     /// </summary>
     public async Task<MarketplaceResult<object>> UpdateStatusAsync(
         int staffId,
         int orderId,
         string status,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
-        var actor = await _access.GetOperatorAsync(staffId, ct);
-        if (actor is null) return MarketplaceResult<object>.Forbidden(StaffOnly);
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            staffId, sessionId, targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return MarketplaceResult<object>.Forbidden(scopeError ?? StaffOnly);
 
         var order = await _db.MarketplaceOrders
             .Where(o => o.OrderId == orderId)
@@ -543,13 +729,17 @@ public class MarketplaceOrderService
         if (order is null)
             return MarketplaceResult<object>.NotFound("Order not found.");
 
+        if (order.WorkspaceId != attribution.WorkspaceId)
+            return MarketplaceResult<object>.Forbidden("That order belongs to another workspace.");
+
         // Staff may also cancel directly, while it is still cancellable.
         if (string.Equals(status, MarketplaceOrderStatus.Cancelled, StringComparison.OrdinalIgnoreCase))
         {
             if (!MarketplaceOrderStatus.CanCancel(order.Status))
                 return MarketplaceResult<object>.BadRequest("This order can no longer be cancelled.");
 
-            await ApplyCancellationAsync(order, "Cancelled by Marketplace Staff.", ct);
+            await ApplyCancellationAsync(
+                order, "Cancelled by Marketplace Staff.", staffId, attribution.OperatorName, attribution.IdLast3, ct);
             return MarketplaceResult<object>.Ok(new { }, "Order cancelled.");
         }
 
@@ -597,7 +787,12 @@ public class MarketplaceOrderService
             foreach (var item in order.Items)
             {
                 if (item.ProductId is not int productId) continue;
-                await _inventory.ConsumeAsync(productId, item.VariantId, item.Quantity, ct);
+
+                var audit = new MarketplaceStockAudit(
+                    order.WorkspaceId ?? attribution.WorkspaceId, staffId,
+                    attribution.OperatorName, attribution.IdLast3, order.OrderId, Reason: null);
+
+                await _inventory.ConsumeAsync(productId, item.VariantId, item.Quantity, audit, ct);
             }
         }
 
@@ -612,11 +807,15 @@ public class MarketplaceOrderService
 
     /// <summary>
     /// Cancels an order and gives the stock back. Shared by the buyer and staff
-    /// paths so both release inventory identically.
+    /// paths so both release inventory identically. Every released line is
+    /// audited with whoever cancelled and, for staff, their operator name.
     /// </summary>
     private async Task ApplyCancellationAsync(
         MarketplaceOrder order,
         string reason,
+        int actorUserId,
+        string? operatorName,
+        string? idLast3,
         CancellationToken ct)
     {
         order.Status = MarketplaceOrderStatus.Cancelled;
@@ -629,7 +828,18 @@ public class MarketplaceOrderService
         foreach (var item in order.Items)
         {
             if (item.ProductId is not int productId) continue;
-            await _inventory.ReleaseAsync(productId, item.VariantId, item.Quantity, ct);
+
+            // Post-migration every order carries its workspace; the lookup is
+            // only a backstop so an audit row can never break a cancellation.
+            var workspaceId = order.WorkspaceId ?? await _db.MarketplaceProducts
+                .Where(p => p.ProductId == productId)
+                .Select(p => p.WorkspaceId)
+                .FirstOrDefaultAsync(ct) ?? 0;
+
+            MarketplaceStockAudit? audit = workspaceId == 0 ? null : new MarketplaceStockAudit(
+                workspaceId, actorUserId, operatorName, idLast3, order.OrderId, reason);
+
+            await _inventory.ReleaseAsync(productId, item.VariantId, item.Quantity, audit, ct);
         }
 
         // Both the buyer and the staff path cancel through here, so the
@@ -753,6 +963,9 @@ public class MarketplaceOrderService
 
             Notes = order.Notes,
             PaymentMethod = order.PaymentMethod,
+
+            WorkspaceId = order.WorkspaceId,
+            WorkspaceName = order.Workspace?.Name ?? "",
 
             SubtotalCentavos = order.SubtotalCentavos,
             DeliveryFeeCentavos = order.DeliveryFeeCentavos,

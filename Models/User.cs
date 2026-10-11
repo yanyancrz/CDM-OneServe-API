@@ -29,6 +29,18 @@ public class User
     public DateTime CreatedAt { get; set; }
         = DateTime.Now;
 
+    /// <summary>
+    /// Every token issued before this moment is dead, which is what makes
+    /// "Log out on all devices" possible with a stateless JWT. Null means
+    /// "nothing was ever revoked" - the normal case.
+    ///
+    /// The login writes the token's issued-at into the <c>iat</c> claim and
+    /// <c>OnTokenValidated</c> in Program.cs compares the two, so a value
+    /// here cannot lock out a token minted afterwards. Changing a password
+    /// can bump the same field.
+    /// </summary>
+    public DateTime? TokensValidFrom { get; set; }
+
     public string Role { get; set; } = "Student";
 
     public string? AdminModule { get; set; }

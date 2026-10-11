@@ -21,15 +21,35 @@ namespace CDM_OneServe_API.Services.Marketplace;
 /// inside the same statement that writes, so two buyers racing for the last
 /// item cannot both win. The database CHECK is the second line of defence.
 /// </summary>
+/// <summary>
+/// One stock movement's audit context, carried from the caller that owns the
+/// surrounding workflow (staff screen, checkout, completion, cancellation).
+/// </summary>
+public sealed record MarketplaceStockAudit(
+    int WorkspaceId,
+    int ActorUserId,
+    string? OperatorName,
+    string? IdLast3,
+    int? OrderId,
+    string? Reason);
+
 public class MarketplaceInventoryService
 {
     private readonly AppDbContext _db;
     private readonly MarketplaceAccessService _access;
+    private readonly MarketplaceOperatorSessionService _sessions;
+    private readonly MarketplaceAuditService _audit;
 
-    public MarketplaceInventoryService(AppDbContext db, MarketplaceAccessService access)
+    public MarketplaceInventoryService(
+        AppDbContext db,
+        MarketplaceAccessService access,
+        MarketplaceOperatorSessionService sessions,
+        MarketplaceAuditService audit)
     {
         _db = db;
         _access = access;
+        _sessions = sessions;
+        _audit = audit;
     }
 
     // ==========================================================
@@ -41,14 +61,23 @@ public class MarketplaceInventoryService
         int staffId,
         string? search,
         string? stockState,
+        Guid? sessionId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         var actor = await _access.GetOperatorAsync(staffId, ct);
         if (actor is null) return MarketplaceResult<List<MarketplaceInventoryDto>>.Forbidden(StaffOnly);
 
+        var (scope, scopeError) = await _sessions.ResolveReadScopeAsync(
+            staffId, sessionId, workspaceId, ct);
+
+        if (scopeError is not null)
+            return MarketplaceResult<List<MarketplaceInventoryDto>>.Forbidden(scopeError);
+
         var rows = await _db.MarketplaceInventory.AsNoTracking()
             .Include(i => i.Product)
             .Include(i => i.Variant)
+            .Where(i => scope == null || i.Product == null || i.Product.WorkspaceId == scope)
             .ToListAsync(ct);
 
         var dtos = rows.Select(ToDto).ToList();
@@ -83,9 +112,11 @@ public class MarketplaceInventoryService
     /// <summary>Low stock - what staff should reorder first.</summary>
     public async Task<MarketplaceResult<List<MarketplaceInventoryDto>>> GetLowStockAsync(
         int staffId,
+        Guid? sessionId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
-        var all = await ListAsync(staffId, null, null, ct);
+        var all = await ListAsync(staffId, null, null, sessionId, workspaceId, ct);
         if (!all.Success) return all;
 
         return MarketplaceResult<List<MarketplaceInventoryDto>>.Ok(all.Data!
@@ -100,21 +131,34 @@ public class MarketplaceInventoryService
     /// <summary>
     /// Sets the on-hand quantity for one product+variant. Reserved is left alone -
     /// it belongs to the orders, not to the shelf count.
+    ///
+    /// Requires an operator session: the entered operator name is what the
+    /// audit row carries, and the row's workspace must be the session's.
     /// </summary>
     public async Task<MarketplaceResult<MarketplaceInventoryDto>> SaveAsync(
         int staffId,
         int inventoryId,
         SaveInventoryRequest request,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
-        var actor = await _access.GetOperatorAsync(staffId, ct);
-        if (actor is null) return MarketplaceResult<MarketplaceInventoryDto>.Forbidden(StaffOnly);
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            staffId, sessionId, targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return MarketplaceResult<MarketplaceInventoryDto>.Forbidden(
+                scopeError ?? StaffOnly);
 
         var row = await _db.MarketplaceInventory
+            .Include(i => i.Product)
             .FirstOrDefaultAsync(i => i.InventoryId == inventoryId, ct);
 
         if (row is null)
             return MarketplaceResult<MarketplaceInventoryDto>.NotFound("Inventory row not found.");
+
+        if (row.Product?.WorkspaceId != attribution.WorkspaceId)
+            return MarketplaceResult<MarketplaceInventoryDto>.Forbidden(
+                "That belongs to another workspace.");
 
         if (request.StockQuantity < 0)
             return MarketplaceResult<MarketplaceInventoryDto>.BadRequest("Stock cannot be negative.");
@@ -126,9 +170,17 @@ public class MarketplaceInventoryService
                 $"{row.ReservedQuantity} unit(s) are reserved by open orders. " +
                 "Cancel or complete those orders first.");
 
+        var previous = row.StockQuantity;
+
         row.StockQuantity = request.StockQuantity;
         row.LowStockThreshold = Math.Max(0, request.LowStockThreshold);
         row.UpdatedAt = DateTime.UtcNow;
+
+        _audit.Record(
+            row.ProductId, row.VariantId, attribution.WorkspaceId, staffId,
+            attribution.OperatorName, attribution.IdLast3,
+            previous, row.StockQuantity - previous,
+            "Adjustment", request.Reason);
 
         await _db.SaveChangesAsync(ct);
 
@@ -143,23 +195,42 @@ public class MarketplaceInventoryService
     public async Task<MarketplaceResult<MarketplaceInventoryDto>> RestockAsync(
         int staffId,
         int inventoryId,
-        int quantity,
+        RestockInventoryRequest request,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
-        var actor = await _access.GetOperatorAsync(staffId, ct);
-        if (actor is null) return MarketplaceResult<MarketplaceInventoryDto>.Forbidden(StaffOnly);
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            staffId, sessionId, targetWorkspaceId: null, ct);
 
+        if (attribution is null)
+            return MarketplaceResult<MarketplaceInventoryDto>.Forbidden(
+                scopeError ?? StaffOnly);
+
+        var quantity = request.Quantity;
         if (quantity <= 0)
             return MarketplaceResult<MarketplaceInventoryDto>.BadRequest("Enter a quantity to add.");
 
         var row = await _db.MarketplaceInventory
+            .Include(i => i.Product)
             .FirstOrDefaultAsync(i => i.InventoryId == inventoryId, ct);
 
         if (row is null)
             return MarketplaceResult<MarketplaceInventoryDto>.NotFound("Inventory row not found.");
 
+        if (row.Product?.WorkspaceId != attribution.WorkspaceId)
+            return MarketplaceResult<MarketplaceInventoryDto>.Forbidden(
+                "That belongs to another workspace.");
+
+        var previous = row.StockQuantity;
+
         row.StockQuantity += quantity;
         row.UpdatedAt = DateTime.UtcNow;
+
+        _audit.Record(
+            row.ProductId, row.VariantId, attribution.WorkspaceId, staffId,
+            attribution.OperatorName, attribution.IdLast3,
+            previous, quantity,
+            "Restock", request.Reason);
 
         await _db.SaveChangesAsync(ct);
 
@@ -183,6 +254,7 @@ public class MarketplaceInventoryService
         int productId,
         int? variantId,
         int quantity,
+        MarketplaceStockAudit? audit,
         CancellationToken ct = default)
     {
         if (quantity <= 0) return true;
@@ -195,7 +267,17 @@ public class MarketplaceInventoryService
                 .SetProperty(i => i.ReservedQuantity, i => i.ReservedQuantity + quantity)
                 .SetProperty(i => i.UpdatedAt, DateTime.UtcNow), ct);
 
-        return affected == 1;
+        if (affected != 1 || audit is null) return affected == 1;
+
+        var stock = await _db.MarketplaceInventory.AsNoTracking()
+            .Where(i => i.ProductId == productId && i.VariantId == variantId)
+            .Select(i => i.StockQuantity)
+            .FirstOrDefaultAsync(ct);
+
+        _audit.Record(productId, variantId, audit.WorkspaceId, audit.ActorUserId,
+            audit.OperatorName, audit.IdLast3, stock, quantity, "Reservation", audit.Reason, audit.OrderId);
+
+        return true;
     }
 
     /// <summary>
@@ -206,17 +288,28 @@ public class MarketplaceInventoryService
         int productId,
         int? variantId,
         int quantity,
+        MarketplaceStockAudit? audit,
         CancellationToken ct = default)
     {
         if (quantity <= 0) return;
 
-        await _db.MarketplaceInventory
+        var affected = await _db.MarketplaceInventory
             .Where(i => i.ProductId == productId &&
                         i.VariantId == variantId &&
                         i.ReservedQuantity >= quantity)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(i => i.ReservedQuantity, i => i.ReservedQuantity - quantity)
                 .SetProperty(i => i.UpdatedAt, DateTime.UtcNow), ct);
+
+        if (affected != 1 || audit is null) return;
+
+        var stock = await _db.MarketplaceInventory.AsNoTracking()
+            .Where(i => i.ProductId == productId && i.VariantId == variantId)
+            .Select(i => i.StockQuantity)
+            .FirstOrDefaultAsync(ct);
+
+        _audit.Record(productId, variantId, audit.WorkspaceId, audit.ActorUserId,
+            audit.OperatorName, audit.IdLast3, stock, -quantity, "Cancellation", audit.Reason, audit.OrderId);
     }
 
     /// <summary>
@@ -227,17 +320,30 @@ public class MarketplaceInventoryService
         int productId,
         int? variantId,
         int quantity,
+        MarketplaceStockAudit? audit,
         CancellationToken ct = default)
     {
         if (quantity <= 0) return;
 
-        await _db.MarketplaceInventory
+        var affected = await _db.MarketplaceInventory
             .Where(i => i.ProductId == productId &&
                         i.VariantId == variantId &&
                         i.StockQuantity >= quantity)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(i => i.StockQuantity, i => i.StockQuantity - quantity)
                 .SetProperty(i => i.UpdatedAt, DateTime.UtcNow), ct);
+
+        if (affected == 1)
+        {
+            var stock = await _db.MarketplaceInventory.AsNoTracking()
+                .Where(i => i.ProductId == productId && i.VariantId == variantId)
+                .Select(i => i.StockQuantity)
+                .FirstOrDefaultAsync(ct);
+
+            if (audit is not null)
+                _audit.Record(productId, variantId, audit.WorkspaceId, audit.ActorUserId,
+                    audit.OperatorName, audit.IdLast3, stock + quantity, -quantity, "Sale", audit.Reason, audit.OrderId);
+        }
 
         // Drop the hold separately, clamped so it can never go negative.
         await _db.MarketplaceInventory

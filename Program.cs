@@ -15,6 +15,7 @@ using CDM_OneServe_API.Services.Notifications;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
 using CDM_OneServe_API.Interfaces.Admin.Library;
 using CDM_OneServe_API.Services.Guidance;
 using CDM_OneServe_API.Services.Marketplace;
@@ -131,6 +132,9 @@ builder.Services.AddScoped<MarketplaceStaffCatalogService>();
 builder.Services.AddScoped<MarketplaceStaffDashboardService>();
 builder.Services.AddScoped<MarketplaceStaffManagementService>();
 builder.Services.AddScoped<MarketplaceMonitoringService>();
+builder.Services.AddScoped<MarketplaceOperatorSessionService>();
+builder.Services.AddScoped<MarketplaceWorkspaceService>();
+builder.Services.AddScoped<MarketplaceAuditService>();
 
 
 // LOST & FOUND - all authorship comes from the OneServe JWT, and the
@@ -249,6 +253,68 @@ builder.Services
                 return Task.CompletedTask;
             },
 
+            // ---------- "Log out on all devices" ----------
+            // A JWT cannot be un-issued, so the token carries the moment it
+            // was minted (iat) and the user row carries the moment every
+            // older token stopped counting (Users.TokensValidFrom). A token
+            // older than that stamp fails validation here, on every request
+            // after it, without touching the auth path.
+            OnTokenValidated = async context =>
+            {
+                var principal = context.Principal;
+                if (principal is null) return;
+
+                var idClaim = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (!int.TryParse(idClaim, out var userId) || userId <= 0) return;
+
+                if (!TryReadIssuedAt(principal, out var issuedAt)) return;
+
+                // Read on EVERY request on purpose: caching the stamp would
+                // leave a revoked token working for as long as the cache
+                // lives, which is the exact thing this feature exists to
+                // stop. It is a primary-key lookup, and it fails open below.
+                var db = context.HttpContext.RequestServices
+                    .GetRequiredService<AppDbContext>();
+
+                DateTime? validFrom;
+
+                try
+                {
+                    validFrom = await db.Users
+                        .AsNoTracking()
+                        .Where(u => u.Id == userId)
+                        .Select(u => u.TokensValidFrom)
+                        .FirstOrDefaultAsync();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[JWT] Revocation check skipped: {ex.Message}");
+                    return;
+                }
+
+                if (validFrom is null) return;
+
+                // The column is written with DateTime.UtcNow, so the value
+                // is a UTC wall clock. MySQL hands it back with an
+                // Unspecified kind, and ToUniversalTime() on that would
+                // assume LOCAL time and push the stamp eight hours into the
+                // future - long enough to also reject the token the user
+                // gets by signing in again right after. Restore the kind.
+                var stamp = DateTime.SpecifyKind(validFrom.Value, DateTimeKind.Utc);
+
+                // Same clock for both values, and the stamp is only ever
+                // written as "now". The comparison is inclusive: a token
+                // minted in the very second the user clicked counts as old,
+                // otherwise that same-second token would stay alive for its
+                // full eight hours. The cost is the same one-second window
+                // on the far side - logging back in immediately afterwards
+                // can hit a 401 on its first call, which a retry fixes.
+                if (issuedAt <= stamp)
+                {
+                    context.Fail("This session was signed out.");
+                }
+            },
+
             OnChallenge = context =>
             {
                 Console.WriteLine(
@@ -272,6 +338,35 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+
+
+/// <summary>
+/// Reads the <c>iat</c> (issued-at) claim as UTC. Missing or malformed means
+/// the token was not minted by this login route, and there is nothing to
+/// compare, so the caller treats it as valid.
+/// </summary>
+static bool TryReadIssuedAt(ClaimsPrincipal principal, out DateTime issuedAt)
+{
+    issuedAt = default;
+
+    var raw = principal.FindFirst("iat")?.Value
+              ?? principal.FindFirst(JwtRegisteredClaimNames.Iat)?.Value;
+
+    if (string.IsNullOrWhiteSpace(raw)) return false;
+
+    if (long.TryParse(raw, out var epoch))
+    {
+        issuedAt = DateTimeOffset.FromUnixTimeSeconds(epoch).UtcDateTime;
+        return true;
+    }
+
+    return DateTime.TryParse(
+        raw,
+        System.Globalization.CultureInfo.InvariantCulture,
+        System.Globalization.DateTimeStyles.AdjustToUniversal |
+        System.Globalization.DateTimeStyles.AssumeUniversal,
+        out issuedAt);
+}
 
 
 // =====================================================

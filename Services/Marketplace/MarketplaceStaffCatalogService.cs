@@ -24,15 +24,21 @@ public class MarketplaceStaffCatalogService
     private readonly AppDbContext _db;
     private readonly MarketplaceAccessService _access;
     private readonly MarketplaceCatalogService _catalog;
+    private readonly MarketplaceOperatorSessionService _sessions;
+    private readonly MarketplaceAuditService _audit;
 
     public MarketplaceStaffCatalogService(
         AppDbContext db,
         MarketplaceAccessService access,
-        MarketplaceCatalogService catalog)
+        MarketplaceCatalogService catalog,
+        MarketplaceOperatorSessionService sessions,
+        MarketplaceAuditService audit)
     {
         _db = db;
         _access = access;
         _catalog = catalog;
+        _sessions = sessions;
+        _audit = audit;
     }
 
     // ==========================================================
@@ -42,17 +48,27 @@ public class MarketplaceStaffCatalogService
     /// <summary>
     /// Every product, including deactivated ones, so staff can see and bring back
     /// something they retired. Buyers only ever see the active list.
+    /// Stall accounts see their own workspace only.
     /// </summary>
     public async Task<MarketplaceResult<List<MarketplaceProductDto>>> ListProductsAsync(
         int staffId,
         string? category,
         string? search,
+        Guid? sessionId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         var actor = await _access.GetOperatorAsync(staffId, ct);
         if (actor is null) return MarketplaceResult<List<MarketplaceProductDto>>.Forbidden(StaffOnly);
 
-        var query = _db.MarketplaceProducts.AsNoTracking();
+        var (scope, scopeError) = await _sessions.ResolveReadScopeAsync(
+            staffId, sessionId, workspaceId, ct);
+
+        if (scopeError is not null)
+            return MarketplaceResult<List<MarketplaceProductDto>>.Forbidden(scopeError);
+
+        var query = _db.MarketplaceProducts.AsNoTracking()
+            .Where(p => scope == null || p.WorkspaceId == scope);
 
         if (!string.IsNullOrWhiteSpace(category))
         {
@@ -79,13 +95,21 @@ public class MarketplaceStaffCatalogService
     public async Task<MarketplaceResult<MarketplaceProductDto>> GetProductAsync(
         int staffId,
         int productId,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
         var actor = await _access.GetOperatorAsync(staffId, ct);
         if (actor is null) return MarketplaceResult<MarketplaceProductDto>.Forbidden(StaffOnly);
 
+        var (scope, scopeError) = await _sessions.ResolveReadScopeAsync(
+            staffId, sessionId, requestedWorkspaceId: null, ct);
+
+        if (scopeError is not null)
+            return MarketplaceResult<MarketplaceProductDto>.Forbidden(scopeError);
+
         var product = await _db.MarketplaceProducts.AsNoTracking()
-            .FirstOrDefaultAsync(p => p.ProductId == productId, ct);
+            .FirstOrDefaultAsync(
+                p => p.ProductId == productId && (scope == null || p.WorkspaceId == scope), ct);
 
         if (product is null)
             return MarketplaceResult<MarketplaceProductDto>.NotFound("Product not found.");
@@ -102,14 +126,22 @@ public class MarketplaceStaffCatalogService
     /// save. Later edits go through the Inventory screen instead, because stock
     /// there is a running count - restocking must be additive, not a blind
     /// overwrite.
+    ///
+    /// Requires an operator session. New products belong to the session's
+    /// workspace - products never move between stalls - and the initial stock
+    /// is audited with the entered operator name.
     /// </summary>
     public async Task<MarketplaceResult<MarketplaceProductDto>> SaveProductAsync(
         int staffId,
         SaveProductRequest request,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
-        var actor = await _access.GetOperatorAsync(staffId, ct);
-        if (actor is null) return MarketplaceResult<MarketplaceProductDto>.Forbidden(StaffOnly);
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            staffId, sessionId, targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return MarketplaceResult<MarketplaceProductDto>.Forbidden(scopeError ?? StaffOnly);
 
         var name = (request.Name ?? "").Trim();
         if (name.Length < 2)
@@ -160,7 +192,21 @@ public class MarketplaceStaffCatalogService
             return MarketplaceResult<MarketplaceProductDto>.NotFound("Product not found.");
 
         var isNew = product is null;
-        product ??= new MarketplaceProduct { CreatedAt = DateTime.UtcNow };
+        product ??= new MarketplaceProduct
+        {
+            CreatedAt = DateTime.UtcNow,
+            WorkspaceId = attribution.WorkspaceId
+        };
+
+        if (!isNew && product.WorkspaceId != attribution.WorkspaceId)
+            return MarketplaceResult<MarketplaceProductDto>.Forbidden(
+                "That product belongs to another workspace.");
+
+        // The request may not smuggle a different workspace in: creation always
+        // uses the session's workspace, and products never move.
+        if (request.WorkspaceId.HasValue && request.WorkspaceId.Value != attribution.WorkspaceId)
+            return MarketplaceResult<MarketplaceProductDto>.BadRequest(
+                "New products belong to this session's workspace.");
 
         product.Name = name;
         product.Description = (request.Description ?? "").Trim();
@@ -177,7 +223,10 @@ public class MarketplaceStaffCatalogService
         if (isNew) _db.MarketplaceProducts.Add(product);
         await _db.SaveChangesAsync(ct);
 
-        var savedVariants = await SaveVariantsAsync(product.ProductId, variants, hasVariants, ct);
+        var savedVariants = await SaveVariantsAsync(
+            product.ProductId, product.WorkspaceId ?? attribution.WorkspaceId,
+            staffId, attribution.OperatorName, attribution.IdLast3,
+            variants, hasVariants, ct);
 
         var dto = await ToDtosAsync(new List<MarketplaceProduct> { product }, ct);
         return MarketplaceResult<MarketplaceProductDto>.Ok(
@@ -192,15 +241,22 @@ public class MarketplaceStaffCatalogService
     public async Task<MarketplaceResult<object>> ArchiveProductAsync(
         int staffId,
         int productId,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
-        var actor = await _access.GetOperatorAsync(staffId, ct);
-        if (actor is null) return MarketplaceResult<object>.Forbidden(StaffOnly);
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            staffId, sessionId, targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return MarketplaceResult<object>.Forbidden(scopeError ?? StaffOnly);
 
         var product = await _db.MarketplaceProducts
             .FirstOrDefaultAsync(p => p.ProductId == productId, ct);
 
         if (product is null) return MarketplaceResult<object>.NotFound("Product not found.");
+
+        if (product.WorkspaceId != attribution.WorkspaceId)
+            return MarketplaceResult<object>.Forbidden("That product belongs to another workspace.");
 
         product.IsActive = false;
         product.UpdatedAt = DateTime.UtcNow;
@@ -213,15 +269,22 @@ public class MarketplaceStaffCatalogService
     public async Task<MarketplaceResult<object>> RestoreProductAsync(
         int staffId,
         int productId,
+        Guid? sessionId,
         CancellationToken ct = default)
     {
-        var actor = await _access.GetOperatorAsync(staffId, ct);
-        if (actor is null) return MarketplaceResult<object>.Forbidden(StaffOnly);
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            staffId, sessionId, targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return MarketplaceResult<object>.Forbidden(scopeError ?? StaffOnly);
 
         var product = await _db.MarketplaceProducts
             .FirstOrDefaultAsync(p => p.ProductId == productId, ct);
 
         if (product is null) return MarketplaceResult<object>.NotFound("Product not found.");
+
+        if (product.WorkspaceId != attribution.WorkspaceId)
+            return MarketplaceResult<object>.Forbidden("That product belongs to another workspace.");
 
         product.IsActive = true;
         product.UpdatedAt = DateTime.UtcNow;
@@ -390,9 +453,16 @@ public class MarketplaceStaffCatalogService
     /// updated in place (keeping their inventory); variants missing from it are
     /// deactivated rather than deleted, because their inventory rows and past
     /// order lines still reference them.
+    ///
+    /// Seeded stock and removed-variant zeroing are both audited with the
+    /// session's operator name.
     /// </summary>
     private async Task<List<MarketplaceProductVariant>> SaveVariantsAsync(
         int productId,
+        int workspaceId,
+        int staffId,
+        string operatorName,
+        string? idLast3,
         List<SaveVariantRequest> payload,
         bool hasVariants,
         CancellationToken ct)
@@ -406,7 +476,8 @@ public class MarketplaceStaffCatalogService
             foreach (var variant in existing.Where(v => v.IsActive))
             {
                 variant.IsActive = false;
-                await ReleaseInventoryAsync(productId, variant.VariantId, ct);
+                await ReleaseInventoryAsync(
+                    productId, workspaceId, staffId, operatorName, idLast3, variant.VariantId, ct);
             }
             return existing;
         }
@@ -440,16 +511,22 @@ public class MarketplaceStaffCatalogService
             // Inventory screen so a restock is additive.
             if (isNew)
             {
+                var seeded = Math.Max(0, item.StockQuantity);
+
                 await _db.MarketplaceInventory.AddAsync(new MarketplaceInventory
                 {
                     ProductId = productId,
                     VariantId = variant.VariantId,
-                    StockQuantity = Math.Max(0, item.StockQuantity),
+                    StockQuantity = seeded,
                     ReservedQuantity = 0,
                     LowStockThreshold = 5,
                     UpdatedAt = DateTime.UtcNow
                 }, ct);
                 await _db.SaveChangesAsync(ct);
+
+                if (seeded > 0)
+                    _audit.Record(productId, variant.VariantId, workspaceId, staffId,
+                        operatorName, idLast3, 0, seeded, "InitialStock", "New product");
             }
 
             kept.Add(variant);
@@ -459,7 +536,8 @@ public class MarketplaceStaffCatalogService
         foreach (var variant in existing.Where(v => v.IsActive && !kept.Any(k => k.VariantId == v.VariantId)))
         {
             variant.IsActive = false;
-            await ReleaseInventoryAsync(productId, variant.VariantId, ct);
+            await ReleaseInventoryAsync(
+                productId, workspaceId, staffId, operatorName, idLast3, variant.VariantId, ct);
         }
 
         if (kept.Count > 0) await _db.SaveChangesAsync(ct);
@@ -471,14 +549,30 @@ public class MarketplaceStaffCatalogService
     /// Drops the reservation hold on a variant that is leaving the catalog and
     /// zeroes its stock, so an inactive size can never look orderable.
     /// </summary>
-    private async Task ReleaseInventoryAsync(int productId, int variantId, CancellationToken ct)
+    private async Task ReleaseInventoryAsync(
+        int productId,
+        int workspaceId,
+        int staffId,
+        string operatorName,
+        string? idLast3,
+        int variantId,
+        CancellationToken ct)
     {
+        var previous = await _db.MarketplaceInventory.AsNoTracking()
+            .Where(i => i.ProductId == productId && i.VariantId == variantId)
+            .Select(i => i.StockQuantity)
+            .FirstOrDefaultAsync(ct);
+
         await _db.MarketplaceInventory
             .Where(i => i.ProductId == productId && i.VariantId == variantId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(i => i.StockQuantity, 0)
                 .SetProperty(i => i.ReservedQuantity, 0)
                 .SetProperty(i => i.UpdatedAt, DateTime.UtcNow), ct);
+
+        if (previous > 0)
+            _audit.Record(productId, variantId, workspaceId, staffId,
+                operatorName, idLast3, previous, -previous, "Correction", "Variant removed from catalog");
     }
 
     /// <summary>
@@ -531,6 +625,19 @@ public class MarketplaceStaffCatalogService
 
         var stockByKey = inventory.ToDictionary(i => (i.ProductId, i.VariantId));
 
+        var workspaceIds = products
+            .Where(p => p.WorkspaceId.HasValue)
+            .Select(p => p.WorkspaceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var workspaces = workspaceIds.Count == 0
+            ? new Dictionary<int, MarketplaceWorkspace>()
+            : await _db.MarketplaceWorkspaces.AsNoTracking()
+                .Include(w => w.StallLocation)
+                .Where(w => workspaceIds.Contains(w.WorkspaceId))
+                .ToDictionaryAsync(w => w.WorkspaceId, ct);
+
         return products.Select(product =>
         {
             var rows = inventory.Where(i => i.ProductId == product.ProductId).ToList();
@@ -559,6 +666,7 @@ public class MarketplaceStaffCatalogService
 
             var stock = rows.Sum(i => i.StockQuantity);
             var reserved = rows.Sum(i => i.ReservedQuantity);
+            workspaces.TryGetValue(product.WorkspaceId ?? 0, out var workspace);
 
             return new MarketplaceProductDto
             {
@@ -571,6 +679,10 @@ public class MarketplaceStaffCatalogService
                 ImageUrl = product.ImageUrl ?? "",
                 HasVariants = product.HasVariants,
                 IsActive = product.IsActive,
+                WorkspaceId = product.WorkspaceId,
+                WorkspaceName = workspace?.Name ?? "",
+                WorkspaceType = workspace?.WorkspaceType ?? "",
+                StallLocationName = workspace?.StallLocation?.Name ?? "",
                 CreatedAt = product.CreatedAt,
                 UpdatedAt = product.UpdatedAt,
                 StockQuantity = stock,

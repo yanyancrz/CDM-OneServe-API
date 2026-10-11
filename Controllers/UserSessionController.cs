@@ -138,6 +138,91 @@ public class UserSessionController : ControllerBase
     }
 
     /// <summary>
+    /// The real "log out on all devices".
+    ///
+    /// Stamps Users.TokensValidFrom with "now", which makes every token
+    /// minted before this moment fail validation on the next request - this
+    /// device included, so the user lands back on the login screen. Unlike
+    /// <see cref="DismissOthers"/> this actually ends the sessions, because
+    /// the token's own issued-at (iat) claim can no longer satisfy the check
+    /// in Program.cs.
+    /// </summary>
+    [HttpPost("everywhere")]
+    public async Task<IActionResult> SignOutEverywhere(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return UnauthorizedSession();
+
+        // UtcNow, not Now: this is compared against the token's iat claim,
+        // which is UTC. The value is stored as the raw UTC wall clock and
+        // read back as UTC in Program.cs, so the two never drift.
+        var now = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+
+        var stamped = await _context.Users
+            .Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(u => u.TokensValidFrom, now), ct);
+
+        if (stamped == 0)
+        {
+            return NotFound(new
+            {
+                success = false,
+                message = "Account not found."
+            });
+        }
+
+        // Keep the device list honest: nothing is signed in any more, so the
+        // "another device" warning must not survive this.
+        await _context.UserSessions
+            .Where(s => s.UserId == userId && !s.IsRevoked)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(s => s.IsRevoked, true), ct);
+
+        return Ok(new
+        {
+            success = true,
+            message = "Signed out on all devices.",
+            signedOutAt = now
+        });
+    }
+
+    /// <summary>
+    /// The account's recent logins, newest first: device, network address
+    /// and times. Powers the dashboard's "Recent Logins" and the Profile
+    /// login-history screen.
+    ///
+    /// The network address is the raw IP the login came from (or the first
+    /// proxy hop) - it says which network, not a GPS pin. Null when the
+    /// proxy never exposed one.
+    /// </summary>
+    [HttpGet("logins")]
+    public async Task<IActionResult> Logins(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return UnauthorizedSession();
+
+        var key = Request.Headers["X-Session-Key"].ToString().Trim();
+
+        var since = DateTime.Now - Lookback;
+
+        var rows = await _context.UserSessions.AsNoTracking()
+            .Where(s => s.UserId == userId && s.CreatedAt >= since)
+            .OrderByDescending(s => s.CreatedAt)
+            .Take(15)
+            .Select(s => new
+            {
+                device = s.DeviceLabel ?? "Unknown device",
+                ipAddress = s.IpAddress,
+                loggedInAt = s.CreatedAt,
+                lastSeenAt = s.LastSeenAt,
+                isRevoked = s.IsRevoked,
+                isCurrent = key.Length > 0 && s.SessionKey == key
+            })
+            .ToListAsync(ct);
+
+        return Ok(new { success = true, logins = rows });
+    }
+
+    /// <summary>
     /// Removes every session of this account INCLUDING this device, so the
     /// warning never comes back for a device the user deliberately abandoned.
     /// </summary>

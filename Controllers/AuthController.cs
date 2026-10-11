@@ -493,6 +493,12 @@ public class AuthController : ControllerBase
         {
             Subject = new ClaimsIdentity(claims),
             Expires = DateTime.UtcNow.AddHours(8),
+
+            // The moment this token becomes usable. This is the value
+            // "log out on all devices" compares against: stamping
+            // Users.TokensValidFrom with anything later kills this token.
+            IssuedAt = DateTime.UtcNow,
+
             SigningCredentials = credentials
         };
 
@@ -1183,7 +1189,10 @@ public class AuthController : ControllerBase
             "LibraryAdmin",
             "LibraryStaff",
             "Counselor",
-            "MarketplaceAdmin"
+            "MarketplaceAdmin",
+            // Stall login accounts (one per marketplace workspace). They
+            // operate through marketplace_staff rows and can never buy.
+            "MarketplaceStaff"
         };
 
         if (!string.IsNullOrWhiteSpace(role) && !validRoles.Contains(role))

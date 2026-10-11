@@ -67,12 +67,26 @@ public class MarketplaceCatalogController : MarketplaceControllerBase
         [FromQuery] string? category,
         [FromQuery] string? subCategory,
         [FromQuery] string? search,
+        [FromQuery] int? workspaceId,
         CancellationToken ct) =>
-        ToAction(await _catalog.ListProductsAsync(category, subCategory, search, ct));
+        ToAction(await _catalog.ListProductsAsync(category, subCategory, search, workspaceId, ct));
 
     [HttpGet("products/{productId:int}")]
     public async Task<IActionResult> Product(int productId, CancellationToken ct) =>
         ToAction(await _catalog.GetProductAsync(productId, ct));
+
+    /// <summary>
+    /// The stalls and the BusinessHub a buyer may shop from, so the shop can
+    /// group the catalog by FoodHub location instead of one flat list.
+    /// </summary>
+    [HttpGet("workspaces")]
+    public async Task<IActionResult> Workspaces(CancellationToken ct) =>
+        ToAction(await _catalog.ListWorkspacesAsync(ct));
+
+    /// <summary>Active FoodHub locations, for grouping stalls while browsing.</summary>
+    [HttpGet("stall-locations")]
+    public async Task<IActionResult> StallLocations(CancellationToken ct) =>
+        ToAction(await _catalog.ListStallLocationsAsync(ct));
 
     // ----- cart -----
 

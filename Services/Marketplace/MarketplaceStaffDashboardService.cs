@@ -8,9 +8,9 @@ namespace CDM_OneServe_API.Services.Marketplace;
 /// <summary>
 /// The single Marketplace Staff dashboard, and the Staff Transactions table.
 ///
-/// Both are read-only aggregations over tables the staff already owns. There is
-/// exactly one staff account, so nothing here needs a "my" filter - the numbers
-/// are simply the marketplace's numbers.
+/// Both are read-only aggregations over tables the staff already owns. Stall
+/// accounts see their own workspace only; floating operators see their
+/// session workspace, or everything when browsing without one.
 ///
 /// Note this is NOT the same as the CDM OneServe Admin's monitoring view: that one
 /// is a read-only outsider's view, while this one sits beside the controls staff
@@ -20,11 +20,16 @@ public class MarketplaceStaffDashboardService
 {
     private readonly AppDbContext _db;
     private readonly MarketplaceAccessService _access;
+    private readonly MarketplaceOperatorSessionService _sessions;
 
-    public MarketplaceStaffDashboardService(AppDbContext db, MarketplaceAccessService access)
+    public MarketplaceStaffDashboardService(
+        AppDbContext db,
+        MarketplaceAccessService access,
+        MarketplaceOperatorSessionService sessions)
     {
         _db = db;
         _access = access;
+        _sessions = sessions;
     }
 
     /// <summary>
@@ -33,24 +38,43 @@ public class MarketplaceStaffDashboardService
     /// </summary>
     public async Task<MarketplaceResult<MarketplaceStaffDashboardDto>> GetDashboardAsync(
         int staffId,
+        Guid? sessionId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         var actor = await _access.GetOperatorAsync(staffId, ct);
         if (actor is null) return MarketplaceResult<MarketplaceStaffDashboardDto>.Forbidden(StaffOnly);
 
+        var (scope, scopeError) = await _sessions.ResolveReadScopeAsync(
+            staffId, sessionId, workspaceId, ct);
+
+        if (scopeError is not null)
+            return MarketplaceResult<MarketplaceStaffDashboardDto>.Forbidden(scopeError);
+
         var today = DateTime.UtcNow.Date;
         var week = today.AddDays(-7);
         var month = today.AddDays(-30);
 
-        var orders = await _db.MarketplaceOrders.AsNoTracking().ToListAsync(ct);
+        var orders = await _db.MarketplaceOrders.AsNoTracking()
+            .Where(o => scope == null || o.WorkspaceId == scope)
+            .ToListAsync(ct);
         var completed = orders.Where(o => o.Status == MarketplaceOrderStatus.Completed).ToList();
 
-        var inventory = await _db.MarketplaceInventory.AsNoTracking().ToListAsync(ct);
+        var productIdsInScope = scope == null
+            ? null
+            : await _db.MarketplaceProducts.AsNoTracking()
+                .Where(p => p.WorkspaceId == scope)
+                .Select(p => p.ProductId)
+                .ToListAsync(ct);
+
+        var inventory = await _db.MarketplaceInventory.AsNoTracking()
+            .Where(i => productIdsInScope == null || productIdsInScope.Contains(i.ProductId))
+            .ToListAsync(ct);
 
         // Only active products count as a product, otherwise a retired item would
         // keep appearing in the staff's own product count.
         var activeProductIds = await _db.MarketplaceProducts.AsNoTracking()
-            .Where(p => p.IsActive)
+            .Where(p => p.IsActive && (productIdsInScope == null || productIdsInScope.Contains(p.ProductId)))
             .Select(p => p.ProductId)
             .ToListAsync(ct);
 
@@ -109,13 +133,23 @@ public class MarketplaceStaffDashboardService
         string? search,
         DateTime? from,
         DateTime? to,
+        Guid? sessionId,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         var actor = await _access.GetOperatorAsync(staffId, ct);
         if (actor is null) return MarketplaceResult<List<MarketplaceTransactionDto>>.Forbidden(StaffOnly);
 
+        var (scope, scopeError) = await _sessions.ResolveReadScopeAsync(
+            staffId, sessionId, workspaceId, ct);
+
+        if (scopeError is not null)
+            return MarketplaceResult<List<MarketplaceTransactionDto>>.Forbidden(scopeError);
+
         var orders = await _db.MarketplaceOrders.AsNoTracking()
+            .Where(o => scope == null || o.WorkspaceId == scope)
             .Include(o => o.CampusLocation)
+            .Include(o => o.Workspace)
             .Include(o => o.Items)
             .OrderByDescending(o => o.CreatedAt)
             .ThenByDescending(o => o.OrderId)
@@ -142,6 +176,8 @@ public class MarketplaceStaffDashboardService
                 ItemCount = o.Items.Sum(i => i.Quantity),
                 TotalCentavos = o.TotalCentavos,
                 Status = o.Status,
+                WorkspaceId = o.WorkspaceId,
+                WorkspaceName = o.Workspace?.Name ?? "",
                 CampusLocationName = o.CampusLocation?.LocationName,
                 SpecificLocation = o.SpecificLocation,
                 RecipientName = o.RecipientName,

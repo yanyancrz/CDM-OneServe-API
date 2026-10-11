@@ -47,6 +47,7 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     private readonly MarketplaceOrderService _orders;
     private readonly MarketplaceStaffCatalogService _catalog;
     private readonly MarketplaceInventoryService _inventory;
+    private readonly MarketplaceWorkspaceService _workspaces;
     private readonly MarketplaceAccessService _access;
 
     public MarketplaceStaffController(
@@ -54,12 +55,14 @@ public class MarketplaceStaffController : MarketplaceControllerBase
         MarketplaceOrderService orders,
         MarketplaceStaffCatalogService catalog,
         MarketplaceInventoryService inventory,
+        MarketplaceWorkspaceService workspaces,
         MarketplaceAccessService access)
     {
         _dashboard = dashboard;
         _orders = orders;
         _catalog = catalog;
         _inventory = inventory;
+        _workspaces = workspaces;
         _access = access;
     }
 
@@ -104,11 +107,14 @@ public class MarketplaceStaffController : MarketplaceControllerBase
 
     /// <summary>Every number the Staff Dashboard shows, in one read.</summary>
     [HttpGet("dashboard")]
-    public async Task<IActionResult> Dashboard(CancellationToken ct)
+    public async Task<IActionResult> Dashboard(
+        [FromQuery] int? workspaceId,
+        CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _dashboard.GetDashboardAsync(userId, ct));
+        return ToAction(await _dashboard.GetDashboardAsync(
+            userId, OperatorSession(), workspaceId, ct));
     }
 
     [HttpGet("transactions")]
@@ -118,12 +124,13 @@ public class MarketplaceStaffController : MarketplaceControllerBase
         [FromQuery] string? search,
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
+        [FromQuery] int? workspaceId,
         CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
         return ToAction(await _dashboard.ListTransactionsAsync(
-            userId, status, method, search, from, to, ct));
+            userId, status, method, search, from, to, OperatorSession(), workspaceId, ct));
     }
 
     // ==========================================================
@@ -141,23 +148,26 @@ public class MarketplaceStaffController : MarketplaceControllerBase
         [FromQuery] string? search,
         [FromQuery] DateTime? from,
         [FromQuery] DateTime? to,
+        [FromQuery] int? workspaceId,
         CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
         return ToAction(await _orders.ListForStaffAsync(
-            userId, status, method, search, from, to, ct));
+            userId, status, method, search, from, to, OperatorSession(), workspaceId, ct));
     }
 
     /// <summary>Only Campus Delivery orders, for the Deliveries screen.</summary>
     [HttpGet("deliveries")]
     public async Task<IActionResult> Deliveries(
         [FromQuery] string? status,
+        [FromQuery] int? workspaceId,
         CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _orders.ListDeliveriesAsync(userId, status, ct));
+        return ToAction(await _orders.ListDeliveriesAsync(
+            userId, status, OperatorSession(), workspaceId, ct));
     }
 
     [HttpGet("orders/{orderId:int}")]
@@ -165,7 +175,7 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _orders.GetForStaffAsync(userId, orderId, ct));
+        return ToAction(await _orders.GetForStaffAsync(userId, orderId, OperatorSession(), ct));
     }
 
     /// <summary>
@@ -174,6 +184,9 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     /// The request may only name the step the server already considers next, so a
     /// Pick Up order can never be pushed down the delivery path, and staff cannot
     /// skip a step. Completing consumes the reserved stock.
+    ///
+    /// Requires an operator session (X-Operator-Session): the entered name is
+    /// recorded, and the order must belong to the session's workspace.
     /// </summary>
     [HttpPost("orders/{orderId:int}/status")]
     public async Task<IActionResult> UpdateStatus(
@@ -183,7 +196,8 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _orders.UpdateStatusAsync(userId, orderId, request.Status, ct));
+        return ToAction(await _orders.UpdateStatusAsync(
+            userId, orderId, request.Status, OperatorSession(), ct));
     }
 
     // ==========================================================
@@ -195,11 +209,13 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     public async Task<IActionResult> Products(
         [FromQuery] string? category,
         [FromQuery] string? search,
+        [FromQuery] int? workspaceId,
         CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _catalog.ListProductsAsync(userId, category, search, ct));
+        return ToAction(await _catalog.ListProductsAsync(
+            userId, category, search, OperatorSession(), workspaceId, ct));
     }
 
     [HttpGet("products/{productId:int}")]
@@ -207,13 +223,16 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _catalog.GetProductAsync(userId, productId, ct));
+        return ToAction(await _catalog.GetProductAsync(userId, productId, OperatorSession(), ct));
     }
 
     /// <summary>
     /// Creates or updates a product together with its size variants. The
     /// category/subcategory must be one of the spec's fixed lists, so the catalog
     /// cannot drift.
+    ///
+    /// Requires an operator session: new products belong to the session's
+    /// workspace, and existing ones must already be there.
     /// </summary>
     [HttpPost("products")]
     public async Task<IActionResult> SaveProduct(
@@ -222,7 +241,7 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _catalog.SaveProductAsync(userId, request, ct));
+        return ToAction(await _catalog.SaveProductAsync(userId, request, OperatorSession(), ct));
     }
 
     /// <summary>
@@ -234,7 +253,7 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _catalog.ArchiveProductAsync(userId, productId, ct));
+        return ToAction(await _catalog.ArchiveProductAsync(userId, productId, OperatorSession(), ct));
     }
 
     [HttpPost("products/{productId:int}/restore")]
@@ -242,7 +261,7 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _catalog.RestoreProductAsync(userId, productId, ct));
+        return ToAction(await _catalog.RestoreProductAsync(userId, productId, OperatorSession(), ct));
     }
 
     // ==========================================================
@@ -257,24 +276,31 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     public async Task<IActionResult> Inventory(
         [FromQuery] string? search,
         [FromQuery] string? stockState,
+        [FromQuery] int? workspaceId,
         CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _inventory.ListAsync(userId, search, stockState, ct));
+        return ToAction(await _inventory.ListAsync(
+            userId, search, stockState, OperatorSession(), workspaceId, ct));
     }
 
     [HttpGet("inventory/low-stock")]
-    public async Task<IActionResult> LowStock(CancellationToken ct)
+    public async Task<IActionResult> LowStock(
+        [FromQuery] int? workspaceId,
+        CancellationToken ct)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _inventory.GetLowStockAsync(userId, ct));
+        return ToAction(await _inventory.GetLowStockAsync(
+            userId, OperatorSession(), workspaceId, ct));
     }
 
     /// <summary>
     /// Sets the on-hand quantity and the low-stock threshold. Refused if it would
     /// drop below what open orders have already reserved.
+    ///
+    /// Requires an operator session: the entered name is audited with the change.
     /// </summary>
     [HttpPut("inventory/{inventoryId:int}")]
     public async Task<IActionResult> SaveInventory(
@@ -284,12 +310,14 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _inventory.SaveAsync(userId, inventoryId, request, ct));
+        return ToAction(await _inventory.SaveAsync(userId, inventoryId, request, OperatorSession(), ct));
     }
 
     /// <summary>
     /// Adds stock. Additive on purpose, so a miscount tops the shelf up instead
     /// of silently wiping it.
+    ///
+    /// Requires an operator session: the entered name is audited with the change.
     /// </summary>
     [HttpPost("inventory/{inventoryId:int}/restock")]
     public async Task<IActionResult> Restock(
@@ -299,7 +327,30 @@ public class MarketplaceStaffController : MarketplaceControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _inventory.RestockAsync(userId, inventoryId, request.Quantity, ct));
+        return ToAction(await _inventory.RestockAsync(userId, inventoryId, request, OperatorSession(), ct));
+    }
+
+    /// <summary>
+    /// The workspace's inventory history: every stock movement with who caused
+    /// it and the operator on duty. Stall accounts see their own workspace only.
+    /// </summary>
+    [HttpGet("inventory/history")]
+    public async Task<IActionResult> InventoryHistory(
+        [FromQuery] int? workspaceId,
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
+        [FromQuery] string? operatorName,
+        [FromQuery] string? actionType,
+        [FromQuery] int? productId,
+        [FromQuery] int? orderId,
+        [FromQuery] int take = 200,
+        CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+
+        return ToAction(await _workspaces.ListAuditAsync(
+            userId, workspaceId, from, to, operatorName, actionType,
+            productId, orderId, take, ct));
     }
 
     // ==========================================================

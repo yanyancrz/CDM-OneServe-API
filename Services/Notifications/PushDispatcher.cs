@@ -27,6 +27,15 @@ public interface IPushDispatcher
     Task<bool> EnqueueAsync(PushNotification notification, CancellationToken ct = default);
 
     /// <summary>
+    /// Queues one notification per user that owns an active subscription.
+    /// For campus-wide events (announcements) that are not addressed to a
+    /// single user, so <see cref="PushNotification.UserId"/> is ignored.
+    /// Returns the number of rows MySQL reported; 0 when nobody is
+    /// subscribed, so no dead work reaches the outbox.
+    /// </summary>
+    Task<int> EnqueueBroadcastAsync(PushNotification notification, CancellationToken ct = default);
+
+    /// <summary>
     /// Saves anything the dispatcher queued but the caller has not
     /// flushed yet (used by code paths that do not already save).
     /// </summary>
@@ -100,6 +109,60 @@ public class PushDispatcher : IPushDispatcher
     }
 
     public Task FlushAsync(CancellationToken ct = default) => _db.SaveChangesAsync(ct);
+
+    /// <summary>
+    /// Broadcast fan-out. Runs as one INSERT ... SELECT over
+    /// PushSubscriptions so a publish reaches every subscribed device
+    /// without a loop of single-row round-trips, and the unique
+    /// DedupeKey index still guarantees one delivery per user per day.
+    ///
+    /// PushSubscriptionId is left NULL on purpose: the worker then
+    /// delivers the row to every device that user owns, instead of the
+    /// single subscription the row was generated from.
+    /// </summary>
+    public async Task<int> EnqueueBroadcastAsync(
+        PushNotification notification,
+        CancellationToken ct = default)
+    {
+        if (notification is null) return 0;
+
+        var (title, body) = PushRoutes.ShapeTitleAndBody(notification.Title, notification.Body);
+
+        var targetUrl = PushRoutes.Resolve(
+            notification.Module, notification.Type, notification.TargetUrl);
+
+        // The user id is appended by SQL, so the key stays unique per
+        // recipient while one statement covers everybody.
+        var keyPrefix =
+            $"{notification.Module.ToLowerInvariant()}:{notification.DedupeKey}:{DateTime.UtcNow:yyyyMMdd}:";
+        if (keyPrefix.Length > 190) keyPrefix = keyPrefix[..190];
+
+        return await _db.Database.ExecuteSqlRawAsync(
+            """
+            INSERT INTO PushOutbox
+                (UserId, PushSubscriptionId, Module, Type, Title, Body,
+                 TargetUrl, Tag, DedupeKey, Priority, Status, Attempts,
+                 ScheduledAt, CreatedAt)
+            SELECT
+                s.UserId, NULL, {0}, {1}, {2}, {3},
+                {4}, {5}, CONCAT({6}, s.UserId), {7}, 'Pending', 0,
+                {8}, {8}
+            FROM (SELECT DISTINCT UserId FROM PushSubscriptions WHERE IsActive = 1) s
+            ON DUPLICATE KEY UPDATE PushOutboxId = PushOutboxId
+            """,
+            [
+                notification.Module,
+                notification.Type,
+                title,
+                body,
+                targetUrl,
+                notification.Tag,
+                keyPrefix,
+                notification.Priority,
+                DateTime.UtcNow
+            ],
+            ct);
+    }
 
     public Task<bool> EnqueueTestAsync(
         int userId,

@@ -68,9 +68,15 @@ public class MarketplaceCatalogService
         string? category,
         string? subCategory,
         string? search,
+        int? workspaceId,
         CancellationToken ct = default)
     {
         var query = _db.MarketplaceProducts.AsNoTracking().Where(p => p.IsActive);
+
+        // Inactive stalls sell nothing: their products stay hidden even though
+        // the rows still exist for history.
+        query = query.Where(p => p.Workspace == null ||
+            (p.Workspace.IsActive && (workspaceId == null || p.WorkspaceId == workspaceId)));
 
         if (!string.IsNullOrWhiteSpace(category))
         {
@@ -119,6 +125,57 @@ public class MarketplaceCatalogService
         var dto = await ToProductDtosAsync(new List<MarketplaceProduct> { product }, ct);
 
         return MarketplaceResult<MarketplaceProductDto>.Ok(dto[0]);
+    }
+
+    // ==========================================================
+    // workspaces for buyer browsing (active only, no account data)
+    // ==========================================================
+
+    /// <summary>
+    /// Every workspace a buyer may shop from: the BusinessHub plus each
+    /// active stall, grouped by the client under its FoodHub location.
+    /// Inactive stalls are hidden here but keep their history.
+    /// </summary>
+    public async Task<MarketplaceResult<List<MarketplaceWorkspaceDto>>> ListWorkspacesAsync(
+        CancellationToken ct = default)
+    {
+        var rows = await _db.MarketplaceWorkspaces.AsNoTracking()
+            .Include(w => w.StallLocation)
+            .Where(w => w.IsActive)
+            .OrderBy(w => w.WorkspaceType).ThenBy(w => w.SortOrder).ThenBy(w => w.Name)
+            .ToListAsync(ct);
+
+        return MarketplaceResult<List<MarketplaceWorkspaceDto>>.Ok(rows.Select(w =>
+            new MarketplaceWorkspaceDto
+            {
+                WorkspaceId = w.WorkspaceId,
+                WorkspaceType = w.WorkspaceType,
+                Name = w.Name,
+                StallLocationId = w.StallLocationId,
+                StallLocationName = w.StallLocation?.Name ?? "",
+                IsActive = w.IsActive,
+                SortOrder = w.SortOrder,
+            }).ToList());
+    }
+
+    /// <summary>Active FoodHub locations, for grouping stalls while browsing.</summary>
+    public async Task<MarketplaceResult<List<MarketplaceStallLocationDto>>> ListStallLocationsAsync(
+        CancellationToken ct = default)
+    {
+        var rows = await _db.MarketplaceStallLocations.AsNoTracking()
+            .Where(l => l.IsActive)
+            .OrderBy(l => l.SortOrder).ThenBy(l => l.Name)
+            .Select(l => new MarketplaceStallLocationDto
+            {
+                StallLocationId = l.StallLocationId,
+                Name = l.Name,
+                Description = l.Description,
+                IsActive = l.IsActive,
+                SortOrder = l.SortOrder,
+            })
+            .ToListAsync(ct);
+
+        return MarketplaceResult<List<MarketplaceStallLocationDto>>.Ok(rows);
     }
 
     // ==========================================================
@@ -240,6 +297,18 @@ public class MarketplaceCatalogService
             i => (i.ProductId, i.VariantId),
             i => i.StockQuantity - i.ReservedQuantity);
 
+        var cartWorkspaceIds = products.Values
+            .Where(p => p.WorkspaceId.HasValue)
+            .Select(p => p.WorkspaceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var cartWorkspaces = cartWorkspaceIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await _db.MarketplaceWorkspaces.AsNoTracking()
+                .Where(w => cartWorkspaceIds.Contains(w.WorkspaceId))
+                .ToDictionaryAsync(w => w.WorkspaceId, w => w.Name, ct);
+
         var dtos = new List<MarketplaceCartItemDto>();
 
         foreach (var item in items)
@@ -276,7 +345,12 @@ public class MarketplaceCatalogService
                 UnitPriceCentavos = unit,
                 Quantity = item.Quantity,
                 SubtotalCentavos = unit * item.Quantity,
-                AvailableQuantity = available
+                AvailableQuantity = available,
+                WorkspaceId = product.WorkspaceId,
+                WorkspaceName = product.WorkspaceId.HasValue &&
+                    cartWorkspaces.TryGetValue(product.WorkspaceId.Value, out var workspaceName)
+                    ? workspaceName
+                    : ""
             });
         }
 
@@ -302,6 +376,18 @@ public class MarketplaceCatalogService
 
         if (product is null)
             return MarketplaceResult<object>.NotFound("This product is unavailable.");
+
+        // An inactive stall sells nothing, even though its rows stay for history.
+        if (product.WorkspaceId.HasValue)
+        {
+            var workspaceActive = await _db.MarketplaceWorkspaces.AsNoTracking()
+                .Where(w => w.WorkspaceId == product.WorkspaceId.Value)
+                .Select(w => w.IsActive)
+                .FirstOrDefaultAsync(ct);
+
+            if (!workspaceActive)
+                return MarketplaceResult<object>.NotFound("This product is unavailable.");
+        }
 
         // A product with variants must have a valid, active one selected, or a
         // one-size product must not have one.
@@ -447,6 +533,19 @@ public class MarketplaceCatalogService
         var inventoryByKey = inventory.ToDictionary(i => (i.ProductId, i.VariantId));
         var variantsByProduct = variants.GroupBy(v => v.ProductId).ToDictionary(g => g.Key, g => g.ToList());
 
+        var workspaceIds = products
+            .Where(p => p.WorkspaceId.HasValue)
+            .Select(p => p.WorkspaceId!.Value)
+            .Distinct()
+            .ToList();
+
+        var workspaces = workspaceIds.Count == 0
+            ? new Dictionary<int, MarketplaceWorkspace>()
+            : await _db.MarketplaceWorkspaces.AsNoTracking()
+                .Include(w => w.StallLocation)
+                .Where(w => workspaceIds.Contains(w.WorkspaceId))
+                .ToDictionaryAsync(w => w.WorkspaceId, ct);
+
         return products.Select(product =>
         {
             var rows = inventory.Where(i => i.ProductId == product.ProductId).ToList();
@@ -478,6 +577,7 @@ public class MarketplaceCatalogService
 
             var stockTotal = rows.Sum(i => i.StockQuantity);
             var reservedTotal = rows.Sum(i => i.ReservedQuantity);
+            workspaces.TryGetValue(product.WorkspaceId ?? 0, out var workspace);
 
             return new MarketplaceProductDto
             {
@@ -490,6 +590,10 @@ public class MarketplaceCatalogService
                 ImageUrl = product.ImageUrl ?? "",
                 HasVariants = product.HasVariants,
                 IsActive = product.IsActive,
+                WorkspaceId = product.WorkspaceId,
+                WorkspaceName = workspace?.Name ?? "",
+                WorkspaceType = workspace?.WorkspaceType ?? "",
+                StallLocationName = workspace?.StallLocation?.Name ?? "",
                 CreatedAt = product.CreatedAt,
                 UpdatedAt = product.UpdatedAt,
                 StockQuantity = stockTotal,
