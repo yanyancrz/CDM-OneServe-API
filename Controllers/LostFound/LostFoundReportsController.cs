@@ -34,15 +34,22 @@ public class LostFoundReportsController : LostFoundControllerBase
     /// The campus board: published reports only. A lost report
     /// whose item was handed over drops off on its own once a
     /// claim is marked Returned.
+    ///
+    /// `search` matches the item name, description, category and
+    /// location - and related words, so "cellphone" also finds
+    /// "smartphone". Results are ranked: exact title match first,
+    /// broader matches below. `type`, `status` and `category` narrow
+    /// the board and combine with the search instead of replacing it.
     /// </summary>
     [HttpGet]
     [AllowAnonymous]
     public async Task<IActionResult> GetPublic(
         [FromQuery] string? type,
         [FromQuery] string? status,
+        [FromQuery] string? category,
         [FromQuery] string? search)
     {
-        return Ok(ApiResponse.Ok(await _service.GetPublicAsync(type, status, search)));
+        return Ok(ApiResponse.Ok(await _service.GetPublicAsync(type, status, category, search)));
     }
 
     /// <summary>Six most recent published found items, for the home screen.</summary>

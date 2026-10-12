@@ -19,6 +19,10 @@ secrets.json
 # Uploaded files (physical IDs, etc.)
 wwwroot/uploads/
 
+# Claim proof-of-ownership files (staged + attached). Runtime data:
+# the reference lives in the database, the bytes never belong in git.
+App_Data/
+
 # Logs
 logs/
 *.log

@@ -92,20 +92,129 @@ public class LostFoundService
     /// <summary>
     /// The public board. Only published reports - and not ones already
     /// handed over (a Returned claim) - are visible to the campus.
-    /// Search covers the item name, description and category.
+    ///
+    /// Search covers the item name, description, category and location,
+    /// across the typed keyword AND its known relatives (see
+    /// <see cref="SearchVocabulary"/>), so "cellphone" still finds
+    /// "Samsung Smartphone". Filtering, matching and relevance ranking
+    /// all run in SQL: the database never ships unmatched rows into
+    /// memory. Best matches come first, newest first inside a tier.
     /// </summary>
-    public async Task<List<ReportDto>> GetPublicAsync(string? type, string? status, string? search) =>
-        await _db.LostFoundReports
+    public async Task<List<ReportDto>> GetPublicAsync(
+        string? type, string? status, string? category, string? search)
+    {
+        // Published reports that have not been handed over yet.
+        var query = _db.LostFoundReports
             .Where(r => (r.Status == "Published" || r.Status == "Found") &&
-                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned") &&
-                        (string.IsNullOrEmpty(type) || r.ReportType == type) &&
-                        (string.IsNullOrEmpty(status) || r.Status == status) &&
-                        (string.IsNullOrEmpty(search) || r.ItemName.Contains(search) ||
-                         r.Description.Contains(search) || r.Category.Contains(search))
-            )
-            .OrderByDescending(r => r.CreatedAt)
-            .Select(r => ToReportDto(r))
+                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned"));
+
+        if (!string.IsNullOrWhiteSpace(type))
+            query = query.Where(r => r.ReportType == type);
+
+        if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(r => r.Status == status);
+
+        if (!string.IsNullOrWhiteSpace(category))
+            query = query.Where(r => r.Category == category);
+
+        var terms = SearchVocabulary.Expand(search);
+
+        // No keyword (or only a word too generic to search on): newest
+        // first, exactly the board as it was.
+        if (terms.Count == 0)
+            return await query
+                .OrderByDescending(r => r.CreatedAt)
+                .Select(r => ToReportDto(r))
+                .ToListAsync();
+
+        var keyword = terms[0];
+        var synonyms = terms.Skip(1).ToList();
+
+        // ---- match: the keyword, plus any relative the dictionary
+        // knows. Every comparison is lower-cased on BOTH sides, so
+        // "PHONE", "Phone" and "phone" behave identically regardless of
+        // how the database collation happens to be set.
+        //
+        // The synonym clause is added only when there ARE synonyms: a
+        // List.Any over an EMPTY list inside the query throws
+        // UnreachableException in EF Core, which a plain no-match search
+        // ("xyzzy") would hit every time.
+        if (synonyms.Count > 0)
+        {
+            query = query.Where(r =>
+                r.ItemName.ToLower().Contains(keyword) ||
+                r.Description.ToLower().Contains(keyword) ||
+                r.Category.ToLower().Contains(keyword) ||
+                r.Location.ToLower().Contains(keyword) ||
+                synonyms.Any(s =>
+                    r.ItemName.ToLower().Contains(s) ||
+                    r.Description.ToLower().Contains(s) ||
+                    r.Category.ToLower().Contains(s) ||
+                    r.Location.ToLower().Contains(s)));
+        }
+        else
+        {
+            query = query.Where(r =>
+                r.ItemName.ToLower().Contains(keyword) ||
+                r.Description.ToLower().Contains(keyword) ||
+                r.Category.ToLower().Contains(keyword) ||
+                r.Location.ToLower().Contains(keyword));
+        }
+
+        // ---- score. The tiers are the ranking the board promises:
+        // 1000 exact title, 800 title starts with it, 600 title contains
+        // the whole word (a partial word in the title lands here too),
+        // 500 exact category or location, 480 a related word in the
+        // title, 450 the word inside category/location, 250 the word in
+        // the description, 200 a related word anywhere but the title.
+        // Every ternary is parenthesised - `a ? 1 : 0 + b ? 1 : 0`
+        // parses as nested conditionals, not the arithmetic it looks
+        // like, and EF cannot translate the result.
+        //
+        // Two projections for the same reason as the Where above: no
+        // synonyms, no synonym tiers.
+        if (synonyms.Count > 0)
+        {
+            return await query
+                .Select(r => new
+                {
+                    Report = r,
+                    Score =
+                        (r.ItemName.ToLower() == keyword ? 1000 : 0) +
+                        (r.ItemName.ToLower().StartsWith(keyword) ? 800 : 0) +
+                        (r.ItemName.ToLower().Contains(keyword) ? 600 : 0) +
+                        ((r.Category.ToLower() == keyword || r.Location.ToLower() == keyword) ? 500 : 0) +
+                        (synonyms.Any(s => r.ItemName.ToLower().Contains(s)) ? 480 : 0) +
+                        ((r.Category.ToLower().Contains(keyword) || r.Location.ToLower().Contains(keyword)) ? 450 : 0) +
+                        (r.Description.ToLower().Contains(keyword) ? 250 : 0) +
+                        (synonyms.Any(s =>
+                            r.Description.ToLower().Contains(s) ||
+                            r.Category.ToLower().Contains(s) ||
+                            r.Location.ToLower().Contains(s)) ? 200 : 0)
+                })
+                .OrderByDescending(row => row.Score)
+                .ThenByDescending(row => row.Report.CreatedAt)
+                .Select(row => ToReportDto(row.Report))
+                .ToListAsync();
+        }
+
+        return await query
+            .Select(r => new
+            {
+                Report = r,
+                Score =
+                    (r.ItemName.ToLower() == keyword ? 1000 : 0) +
+                    (r.ItemName.ToLower().StartsWith(keyword) ? 800 : 0) +
+                    (r.ItemName.ToLower().Contains(keyword) ? 600 : 0) +
+                    ((r.Category.ToLower() == keyword || r.Location.ToLower() == keyword) ? 500 : 0) +
+                    ((r.Category.ToLower().Contains(keyword) || r.Location.ToLower().Contains(keyword)) ? 450 : 0) +
+                    (r.Description.ToLower().Contains(keyword) ? 250 : 0)
+            })
+            .OrderByDescending(row => row.Score)
+            .ThenByDescending(row => row.Report.CreatedAt)
+            .Select(row => ToReportDto(row.Report))
             .ToListAsync();
+    }
 
     public async Task<List<ReportDto>> GetRecentFoundAsync() =>
         await _db.LostFoundReports
@@ -423,10 +532,9 @@ public class LostFoundService
             return LostFoundResult<MyClaimDto>.BadRequest(
                 "This claim can no longer be changed. Ask at the office if something is wrong.");
 
+        // The explanation is no longer part of the claim form; keep whatever
+        // an older claim already had and never require a new one.
         var explanation = dto.OwnershipExplanation?.Trim();
-        if (string.IsNullOrWhiteSpace(explanation))
-            return LostFoundResult<MyClaimDto>.BadRequest(
-                "Please explain why you believe this item is yours.");
 
         string? proofPath = null;
         string? proofName = null;
@@ -464,8 +572,8 @@ public class LostFoundService
 
         var oldPath = claim.ProofAttachmentPath;
 
-        claim.VerificationNotes = explanation;
-        claim.OwnershipExplanation = explanation;
+        claim.VerificationNotes = explanation ?? claim.VerificationNotes;
+        claim.OwnershipExplanation = explanation ?? claim.OwnershipExplanation;
         claim.IdentifyingDetails = details;
         claim.NoProofReason = proofPath == null ? noProofReason : null;
         claim.ProofAttachmentPath = proofPath;
@@ -617,10 +725,10 @@ public class LostFoundService
     /// <summary>
     /// Submit a claim on a found item.
     ///
-    /// Only the explanation and, when NO proof file is attached, the
-    /// no-proof reason and the identifying details are required. A claim
-    /// is never auto-rejected for a missing attachment - the finder (or
-    /// the admin) decides with the evidence in front of them.
+    /// When NO proof file is attached, the no-proof reason and the
+    /// identifying details are required. A claim is never auto-rejected
+    /// for a missing attachment - the finder (or the admin) decides with
+    /// the evidence in front of them.
     /// </summary>
     public async Task<LostFoundResult<MyClaimDto>> SubmitClaimAsync(int userId, CreateClaimDto dto)
     {
@@ -651,13 +759,13 @@ public class LostFoundService
                 "You already have an open claim on this item.");
 
         // ---- validate the claim's evidence ----
+        // The "why is this yours?" paragraph was removed from the claim
+        // form: an explanation is no longer collected or required. A
+        // claimant who still sends one (an older client) keeps it on the
+        // record, but nothing depends on it being present.
         var explanation = dto.OwnershipExplanation?.Trim();
         var details = dto.IdentifyingDetails?.Trim();
         var noProofReason = dto.NoProofReason?.Trim();
-
-        if (string.IsNullOrWhiteSpace(explanation))
-            return LostFoundResult<MyClaimDto>.BadRequest(
-                "Please explain why you believe this item is yours.");
 
         // The upload endpoint owns file validation; here we only re-check
         // that a path, if any, is one this module issued for this caller
@@ -701,7 +809,9 @@ public class LostFoundService
         {
             ReportId = report.ReportId,
             ClaimedByUserId = userId,
-            VerificationNotes = explanation!,
+            // Legacy field: the explanation is no longer collected, so new
+            // claims leave it empty. Kept for ones written before that.
+            VerificationNotes = explanation ?? string.Empty,
             OwnershipExplanation = explanation,
             IdentifyingDetails = details,
             NoProofReason = proofPath == null ? noProofReason : null,

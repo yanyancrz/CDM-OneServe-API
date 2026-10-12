@@ -3,7 +3,11 @@ namespace CDM_OneServe_API.DTOs.LostFound;
 /// <summary>
 /// Submit (or update) a claim. Every field except ReportId is optional
 /// EXCEPT the ones the service requires when no proof file is attached:
-/// OwnershipExplanation, IdentifyingDetails and NoProofReason.
+/// IdentifyingDetails and NoProofReason.
+///
+/// OwnershipExplanation is legacy: the "why is this yours?" question was
+/// removed from the claim form, so new claims never send it. An older
+/// client that still does gets the value stored, but nothing requires it.
 /// </summary>
 public class CreateClaimDto
 {
