@@ -53,6 +53,26 @@ public class AuthController : ControllerBase
         return Ok("AUTH-JWT-v2");
     }
 
+    // =========================================================
+    // AUTH CONFIG (public)
+    // =========================================================
+    // Tells the login page which sign-in options the
+    // server has set up. Only public values - never
+    // keys or secrets - are exposed here.
+
+    [HttpGet("config")]
+    public IActionResult GetAuthConfig()
+    {
+        var googleClientId = _configuration["Google:ClientId"];
+
+        return Ok(new
+        {
+            googleClientId = string.IsNullOrWhiteSpace(googleClientId)
+                ? null
+                : googleClientId
+        });
+    }
+
     private static string NormalizeName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -459,9 +479,26 @@ public class AuthController : ControllerBase
         }
 
         // =====================================================
-        // GENERATE JWT TOKEN
+        // LOGIN SUCCESS
         // =====================================================
 
+        return await BuildLoginResultAsync(
+            user,
+            "Signed in to CDM OneServe.");
+    }
+
+    // =========================================================
+    // LOGIN RESULT (shared)
+    // =========================================================
+    // Mints the JWT, records the session and builds the
+    // payload the client stores. The password login and
+    // Google sign-in both end here, so both issue
+    // identical tokens and leave the same audit trail.
+
+    private async Task<IActionResult> BuildLoginResultAsync(
+        User user,
+        string activityDescription)
+    {
         var jwtKey = _configuration["Jwt:Key"];
 
         if (string.IsNullOrWhiteSpace(jwtKey))
@@ -506,10 +543,6 @@ public class AuthController : ControllerBase
         var token = tokenHandler.CreateToken(tokenDescriptor);
         var jwtToken = tokenHandler.WriteToken(token);
 
-        // =====================================================
-        // LOGIN SUCCESS
-        // =====================================================
-
         // Leave a trail so "Last login / Never signed in" can be shown without
         // a new column. A failure here must never break the login itself.
         //
@@ -525,7 +558,7 @@ public class AuthController : ControllerBase
             {
                 UserId = user.Id,
                 Action = UserActivityActions.Login,
-                Description = "Signed in to CDM OneServe.",
+                Description = activityDescription,
                 CreatedAt = DateTime.Now
             });
 
@@ -579,6 +612,116 @@ public class AuthController : ControllerBase
                 requiresSetupProfile = !user.IsProfileComplete
             }
         });
+    }
+
+    // =========================================================
+    // GOOGLE SIGN-IN
+    // =========================================================
+    // The browser passes the Google ID token from the
+    // Identity Services button. It is verified against
+    // Google's own public keys here, and the account
+    // must already exist: Google sign-in never creates
+    // an account, so the admin verification step can
+    // never be bypassed.
+
+    [HttpPost("google")]
+    public async Task<IActionResult> GoogleLogin(
+        [FromBody] GoogleLoginRequest request)
+    {
+        var clientId = _configuration["Google:ClientId"];
+
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            return BadRequest(new
+            {
+                message = "Google sign-in is not available yet."
+            });
+        }
+
+        var idToken = request?.IdToken?.Trim();
+
+        if (string.IsNullOrEmpty(idToken))
+        {
+            return BadRequest(new
+            {
+                message = "Missing Google credential."
+            });
+        }
+
+        GoogleTokenPayload payload;
+
+        try
+        {
+            payload = await GoogleTokenValidator
+                .ValidateAsync(idToken, clientId);
+        }
+        catch (Exception)
+        {
+            return BadRequest(new
+            {
+                message = "Could not verify the Google sign-in."
+            });
+        }
+
+        var email = payload.Email?.Trim();
+
+        if (string.IsNullOrEmpty(email))
+        {
+            return BadRequest(new
+            {
+                message = "The Google account has no email address."
+            });
+        }
+
+        var user = await _context.Users
+            .FirstOrDefaultAsync(x => x.Email == email);
+
+        if (user == null)
+        {
+            return BadRequest(new
+            {
+                message = "No OneServe account is linked to this Google account. Please register first."
+            });
+        }
+
+        // The same account-state rules as the password
+        // login - a Google account does not override them.
+
+        if (user.AccountStatus == "Pending")
+        {
+            return BadRequest(new
+            {
+                message = "Your registration is still pending admin verification."
+            });
+        }
+
+        if (user.AccountStatus == "Rejected")
+        {
+            return BadRequest(new
+            {
+                message = "Your registration has been rejected. Please contact the administrator."
+            });
+        }
+
+        if (user.AccountStatus == "Suspended")
+        {
+            return BadRequest(new
+            {
+                message = "Your account has been suspended. Please contact the administrator."
+            });
+        }
+
+        if (user.AccountStatus == "Deleted")
+        {
+            return BadRequest(new
+            {
+                message = "This account has been deleted. Please register again to restore access."
+            });
+        }
+
+        return await BuildLoginResultAsync(
+            user,
+            "Signed in to CDM OneServe (Google).");
     }
 
     // =========================================================
