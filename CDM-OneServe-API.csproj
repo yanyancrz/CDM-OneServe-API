@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>CDM_OneServe_API</RootNamespace>
+    <UserSecretsId>ea926834-fcab-4e2a-a5e0-d585d12d6da4</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
