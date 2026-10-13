@@ -1639,6 +1639,20 @@ public class LostFoundService
             .Where(r => r.Status == "Published")
             .ToListAsync();
 
+        // Stale work: self-matches (one user owns BOTH the lost and the
+        // found report) are no longer generated, so drop the existing
+        // ones now. A self-match is never a real finding, so not even a
+        // confirmed one survives the sweep.
+        var staleSelfMatches = await _db.MatchRecords
+            .Include(m => m.LostReport)
+            .Include(m => m.FoundReport)
+            .Where(m => m.LostReport != null && m.FoundReport != null &&
+                        m.LostReport.UserId == m.FoundReport.UserId)
+            .ToListAsync();
+
+        if (staleSelfMatches.Count > 0)
+            _db.MatchRecords.RemoveRange(staleSelfMatches);
+
         foreach (var report in reports)
             await RefreshAutoMatchesAsync(report);
 
@@ -1649,6 +1663,11 @@ public class LostFoundService
     /// Recomputes every pair involving this report. New pairs at or above
     /// the threshold are stored and both owners are notified; confirmed
     /// pairs are never rescored - a human verdict beats the arithmetic.
+    ///
+    /// Same-owner pairs are skipped by design: a user's own Lost report
+    /// can never match their own Found report, so nobody "finds" their
+    /// own item. The check compares the report owners' USER IDS, never
+    /// their names (two people can share a name).
     /// </summary>
     public async Task RefreshAutoMatchesAsync(LostFoundReport report)
     {
@@ -1656,6 +1675,7 @@ public class LostFoundService
 
         var candidates = await _db.LostFoundReports
             .Where(r => r.ReportId != report.ReportId &&
+                        r.UserId != report.UserId &&
                         (r.Status == "Published" || r.Status == "Found") &&
                         !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned") &&
                         (isLost ? r.ReportType == "Found" : r.ReportType == "Lost"))
@@ -1786,6 +1806,13 @@ public class LostFoundService
 
         if (!IsStatus(foundReport.ReportType, "Found"))
             return LostFoundResult<MatchDto>.BadRequest("The second report must be a Found report.");
+
+        // The owners decide who a match is *between*: one user's own Lost
+        // report can never match their own Found report. Compared by USER
+        // ID, never by name - two students can share a name.
+        if (lostReport.UserId == foundReport.UserId)
+            return LostFoundResult<MatchDto>.BadRequest(
+                "A report cannot be matched with another report from the same user.");
 
         var ownsLost = lostReport.UserId == userId;
         var ownsFound = foundReport.UserId == userId;

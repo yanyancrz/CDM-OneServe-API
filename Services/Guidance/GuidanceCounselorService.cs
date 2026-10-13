@@ -215,7 +215,17 @@ public class GuidanceCounselorService
         if (appt == null)
             return GuidanceResult<object>.Fail(404, "Appointment not found.");
 
-        if (FinalStatuses.Contains(appt.Status) && appt.Status != status)
+        // Idempotent: asking for the status the session already carries is a
+        // success, not a conflict. GuidanceExpiryBackgroundService terminates
+        // unattended sessions automatically every 5 minutes, so by the time a
+        // counselor presses "terminate" the row is usually noshow already -
+        // that must read as "done", not as an error.
+        if (appt.Status == status)
+            return GuidanceResult<object>.Ok(
+                new { id = appt.Id, status = appt.Status },
+                $"Appointment is already {status.ToLowerInvariant()}.");
+
+        if (FinalStatuses.Contains(appt.Status))
             return GuidanceResult<object>.Fail(409,
                 $"This appointment is already {appt.Status.ToLowerInvariant()} and can no longer be changed.");
 
@@ -286,6 +296,95 @@ public class GuidanceCounselorService
 
         return GuidanceResult<object>.Ok(new { id = appt.Id, status = appt.Status },
             $"Appointment {status.ToLowerInvariant()}.");
+    }
+
+    // ------------------------------------------------------------------
+    // AUTO NO-SHOW (background job)
+    // ------------------------------------------------------------------
+    /// <summary>
+    /// Grace period after the slot start before an absent student terminates
+    /// the session. Same 30 minutes the app has always shown, and one full
+    /// default slot long, so somebody running a few minutes late can still
+    /// be marked Arrived.
+    /// </summary>
+    public const int NoShowGraceMinutes = 30;
+
+    /// <summary>
+    /// Terminates confirmed sessions nobody attended, with no button press.
+    /// A Confirmed appointment whose start has passed by
+    /// <see cref="NoShowGraceMinutes"/> - or whose date has passed entirely -
+    /// becomes NoShow: the student is notified the same way the manual
+    /// no-show does, and the slot stops blocking other students from
+    /// booking that time.
+    ///
+    /// Runs from <see cref="GuidanceExpiryBackgroundService"/>, so a
+    /// counselor who never opens the page still sees the queue clean up.
+    /// </summary>
+    public async Task<int> AutoTerminateNoShowsAsync(CancellationToken ct)
+    {
+        var today = GuidanceClock.Today;
+        var minutesNow = GuidanceClock.Now.Hour * 60 + GuidanceClock.Now.Minute;
+
+        // Only live sessions can auto-terminate; every other status is
+        // already final (Completed/Cancelled/Rejected/Expired/NoShow).
+        var confirmed = await _context.GuidanceAppointments
+            .Where(a => a.Status == "Confirmed" && a.Date <= today)
+            .ToListAsync(ct);
+
+        var stale = confirmed.Where(a =>
+            a.Date < today ||
+            (GuidanceClock.ParseSlot(a.TimeSlot) ?? 0) + NoShowGraceMinutes <= minutesNow)
+            .ToList();
+
+        if (stale.Count == 0) return 0;
+
+        foreach (var appt in stale)
+        {
+            appt.Status = "NoShow";
+            appt.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _context.SaveChangesAsync(ct);
+
+        foreach (var appt in stale)
+        {
+            var counselorName = await _context.Users.AsNoTracking()
+                .Where(u => u.Id == appt.CounselorId)
+                .Select(u => u.FullName)
+                .FirstOrDefaultAsync(ct) ?? "The Guidance Office";
+
+            await NotifyAsync(appt.StudentId, "GUIDANCE_APPOINTMENT_NOSHOW", "Marked as No-Show",
+                $"{counselorName} marked you as no-show for your appointment on {D(appt.Date)} at {appt.TimeSlot}. " +
+                $"The session was automatically terminated - there was no arrival within {NoShowGraceMinutes} minutes of the start. " +
+                "Please book a new appointment if you still need one.", ct);
+
+            // Email the decision too. A failure here must never fail the
+            // termination itself.
+            try
+            {
+                var student = await _context.Users.AsNoTracking()
+                    .Where(u => u.Id == appt.StudentId)
+                    .Select(u => new { u.Email, u.FullName })
+                    .FirstOrDefaultAsync(ct);
+
+                if (student != null)
+                {
+                    await _email.SendStudentAppointmentDecisionAsync(
+                        student.Email,
+                        student.FullName,
+                        counselorName,
+                        D(appt.Date),
+                        appt.TimeSlot,
+                        "NoShow");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Guidance: auto no-show email failed for appointment {Id}.", appt.Id);
+            }
+        }
+
+        return stale.Count;
     }
 
     // ------------------------------------------------------------------

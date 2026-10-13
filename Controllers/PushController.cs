@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Notifications;
 using CDM_OneServe_API.Services.Notifications;
 using Microsoft.AspNetCore.Authorization;
@@ -26,15 +27,18 @@ public class PushController : ControllerBase
     private readonly PushSubscriptionService _subscriptions;
     private readonly IPushDispatcher _dispatcher;
     private readonly IConfiguration _configuration;
+    private readonly AppDbContext _db;
 
     public PushController(
         PushSubscriptionService subscriptions,
         IPushDispatcher dispatcher,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        AppDbContext db)
     {
         _subscriptions = subscriptions;
         _dispatcher = dispatcher;
         _configuration = configuration;
+        _db = db;
     }
 
     /// <summary>
@@ -177,6 +181,40 @@ public class PushController : ControllerBase
         {
             success = true,
             message = "Test notification queued. It should arrive in a few seconds."
+        });
+    }
+
+    /// <summary>
+    /// What happened to the caller's most recent test notification.
+    ///
+    /// The test endpoint only QUEUES the message - delivery happens in the
+    /// separate Node notification service - so "queued" is not "delivered".
+    /// This exposes what the outbox recorded for the last test row so the
+    /// UI can say "delivered" or "still queued, the service is not
+    /// delivering" instead of a claim it cannot back up.
+    /// </summary>
+    [HttpGet("test-status")]
+    public async Task<IActionResult> TestStatus(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return UnauthorizedSession();
+
+        var row = await _db.PushOutbox.AsNoTracking()
+            .Where(m => m.UserId == userId && m.Module == "System" && m.Type == "Test")
+            .OrderByDescending(m => m.PushOutboxId)
+            .Select(m => new { m.PushOutboxId, m.Status, m.LastError, m.ScheduledAt, m.ProcessedAt })
+            .FirstOrDefaultAsync(ct);
+
+        if (row is null)
+            return Ok(new { success = true, exists = false });
+
+        return Ok(new
+        {
+            success = true,
+            exists = true,
+            status = row.Status,
+            lastError = row.LastError,
+            scheduledAt = row.ScheduledAt,
+            processedAt = row.ProcessedAt
         });
     }
 
