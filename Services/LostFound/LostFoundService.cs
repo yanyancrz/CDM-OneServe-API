@@ -82,16 +82,25 @@ public class LostFoundService
     // REPORTS
     // =========================================================
 
-    public async Task<List<ReportDto>> GetMyReportsAsync(int userId) =>
-        await _db.LostFoundReports
+    public async Task<List<ReportDto>> GetMyReportsAsync(int userId)
+    {
+        var mine = await _db.LostFoundReports
             .Where(r => r.UserId == userId)
             .OrderByDescending(r => r.CreatedAt)
             .Select(r => ToReportDto(r))
             .ToListAsync();
 
+        await FillReturnedInfoAsync(mine);
+        return mine;
+    }
+
     /// <summary>
-    /// The public board. Only published reports - and not ones already
-    /// handed over (a Returned claim) - are visible to the campus.
+    /// The public board. Only published reports are visible to the campus.
+    ///
+    /// Found reports stay on the board even after the handover (a Returned
+    /// claim) - the campus can still see the item and who claimed it. Lost
+    /// reports drop off once returned: the owner has the item back, so
+    /// there is nothing left to look for.
     ///
     /// Search covers the item name, description, category and location,
     /// across the typed keyword AND its known relatives (see
@@ -103,10 +112,12 @@ public class LostFoundService
     public async Task<List<ReportDto>> GetPublicAsync(
         string? type, string? status, string? category, string? search)
     {
-        // Published reports that have not been handed over yet.
+        // Published reports. Lost ones that were handed over drop off;
+        // Found ones stay so the handover stays visible.
         var query = _db.LostFoundReports
             .Where(r => (r.Status == "Published" || r.Status == "Found") &&
-                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned"));
+                        (r.ReportType == "Found" ||
+                         !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned")));
 
         if (!string.IsNullOrWhiteSpace(type))
             query = query.Where(r => r.ReportType == type);
@@ -122,10 +133,15 @@ public class LostFoundService
         // No keyword (or only a word too generic to search on): newest
         // first, exactly the board as it was.
         if (terms.Count == 0)
-            return await query
+        {
+            var board = await query
                 .OrderByDescending(r => r.CreatedAt)
                 .Select(r => ToReportDto(r))
                 .ToListAsync();
+
+            await FillReturnedInfoAsync(board);
+            return board;
+        }
 
         var keyword = terms[0];
         var synonyms = terms.Skip(1).ToList();
@@ -175,7 +191,7 @@ public class LostFoundService
         // synonyms, no synonym tiers.
         if (synonyms.Count > 0)
         {
-            return await query
+            var ranked = await query
                 .Select(r => new
                 {
                     Report = r,
@@ -196,9 +212,12 @@ public class LostFoundService
                 .ThenByDescending(row => row.Report.CreatedAt)
                 .Select(row => ToReportDto(row.Report))
                 .ToListAsync();
+
+            await FillReturnedInfoAsync(ranked);
+            return ranked;
         }
 
-        return await query
+        var plain = await query
             .Select(r => new
             {
                 Report = r,
@@ -214,16 +233,25 @@ public class LostFoundService
             .ThenByDescending(row => row.Report.CreatedAt)
             .Select(row => ToReportDto(row.Report))
             .ToListAsync();
+
+        await FillReturnedInfoAsync(plain);
+        return plain;
     }
 
-    public async Task<List<ReportDto>> GetRecentFoundAsync() =>
-        await _db.LostFoundReports
-            .Where(r => r.ReportType == "Found" && r.Status == "Published" &&
-                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned"))
+    public async Task<List<ReportDto>> GetRecentFoundAsync()
+    {
+        // Returned Found reports stay visible: the handover is part of
+        // the record the campus sees.
+        var recent = await _db.LostFoundReports
+            .Where(r => r.ReportType == "Found" && r.Status == "Published")
             .OrderByDescending(r => r.CreatedAt)
             .Take(6)
             .Select(r => ToReportDto(r))
             .ToListAsync();
+
+        await FillReturnedInfoAsync(recent);
+        return recent;
+    }
 
     public async Task<List<ReportDto>> GetRecentLostAsync() =>
         await _db.LostFoundReports
@@ -240,9 +268,12 @@ public class LostFoundService
         var report = await _db.LostFoundReports
             .FirstOrDefaultAsync(r => r.ReportId == id);
 
-        return report is null || !IsPubliclyVisible(report)
-            ? null
-            : ToReportDto(report);
+        if (report is null || !IsPubliclyVisible(report))
+            return null;
+
+        var dto = ToReportDto(report);
+        await FillReturnedInfoAsync(new List<ReportDto> { dto });
+        return dto;
     }
 
     public async Task<LostFoundResult<ReportDto>> CreateReportAsync(int userId, CreateReportDto dto)
@@ -2430,6 +2461,72 @@ public class LostFoundService
         ItemCustody = string.IsNullOrWhiteSpace(r.ItemCustody) ? "None" : r.ItemCustody,
         CreatedAt = r.CreatedAt,
     };
+
+    /// <summary>
+    /// Fills who a handed-over item went back to: the receiver name the
+    /// admin typed at pickup, and the claimant account behind the claim.
+    /// Batched (one query per table) so board lists never go N+1.
+    /// </summary>
+    private async Task FillReturnedInfoAsync(
+        List<ReportDto> reports, CancellationToken ct = default)
+    {
+        if (reports.Count == 0) return;
+
+        var ids = reports.Select(r => r.ReportId).ToList();
+
+        var returnedClaims = await _db.ClaimRecords
+            .Where(c => ids.Contains(c.ReportId) && c.Status == "Returned")
+            .ToListAsync(ct);
+
+        if (returnedClaims.Count == 0) return;
+
+        // Newest Returned claim wins when a report somehow has several.
+        var latestByReport = returnedClaims
+            .GroupBy(c => c.ReportId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderByDescending(c => c.ClaimId).First());
+
+        var claimIds = latestByReport.Values.Select(c => c.ClaimId).ToList();
+
+        var schedules = await _db.ClaimSchedules
+            .Where(s => claimIds.Contains(s.ClaimId) && s.Status == "Completed")
+            .ToListAsync(ct);
+
+        var scheduleByClaim = schedules
+            .GroupBy(s => s.ClaimId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderByDescending(s => s.ScheduleId).First());
+
+        var userIds = latestByReport.Values
+            .Select(c => c.ClaimedByUserId)
+            .Distinct()
+            .ToList();
+
+        var namesByUser = await _db.Users
+            .Where(u => userIds.Contains(u.Id))
+            .Select(u => new { u.Id, u.FullName })
+            .ToListAsync(ct);
+
+        var nameByUserId = namesByUser.ToDictionary(u => u.Id, u => u.FullName);
+
+        foreach (var report in reports)
+        {
+            if (!latestByReport.TryGetValue(report.ReportId, out var claim))
+                continue;
+
+            scheduleByClaim.TryGetValue(claim.ClaimId, out var schedule);
+            nameByUserId.TryGetValue(claim.ClaimedByUserId, out var claimantName);
+
+            report.IsReturned = true;
+            report.ReturnedToName = string.IsNullOrWhiteSpace(schedule?.ReceivedByName)
+                ? claimantName
+                : schedule.ReceivedByName.Trim();
+            report.ClaimedByName = claimantName;
+            report.ReturnedAt = schedule?.CompletedAt;
+        }
+    }
 
     private static PickupAvailabilityDto ToAvailabilityDto(PickupAvailability a) => new()
     {

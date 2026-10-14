@@ -14,4 +14,22 @@ public class ReportDto
     public string? ImagePath { get; set; }
     public string ItemCustody { get; set; } = "None";
     public DateTime CreatedAt { get; set; }
+
+    // ---- handed-over (Returned) info ----
+    // Found reports stay on the board even after the handover, so the
+    // board shows who the item went back to: the receiver name the
+    // admin typed at pickup, and the claimant account that filed the
+    // claim. No student ID is exposed here.
+
+    /** A Returned claim exists on this report. */
+    public bool IsReturned { get; set; }
+
+    /** Receiver name entered by the admin at pickup. */
+    public string? ReturnedToName { get; set; }
+
+    /** Full name of the claimant account that filed the claim. */
+    public string? ClaimedByName { get; set; }
+
+    /** When the handover was recorded. */
+    public DateTime? ReturnedAt { get; set; }
 }
