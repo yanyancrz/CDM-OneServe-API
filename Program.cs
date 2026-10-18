@@ -149,6 +149,47 @@ builder.Services.AddScoped<MarketplaceOperatorSessionService>();
 builder.Services.AddScoped<MarketplaceWorkspaceService>();
 builder.Services.AddScoped<MarketplaceAuditService>();
 
+// Campus services (003_campus_services.sql): canteen pre-ordering + order
+// claim codes, the campus card ledger, and the Student/Faculty ID claim.
+builder.Services.AddScoped<MarketplaceClaimService>();
+builder.Services.AddScoped<MarketplaceCardService>();
+builder.Services.AddScoped<MarketplaceIdClaimService>();
+
+// Seller onboarding (012_seller_applications.sql): a verified Student or
+// Faculty account applies to sell; the Marketplace Head reviews and, on
+// approval, creates the storefront and assigns them as owner.
+builder.Services.AddScoped<MarketplaceSellerApplicationService>();
+
+// Storefronts (006_storefronts.sql): the seller/shopfront layer and its
+// five-permission team model. Access is a separate service from the workspace
+// operator scoping, because "which terminal is this account pinned to" and
+// "what may this person do in this shop" are different questions.
+builder.Services.AddScoped<MarketplaceStoreAccessService>();
+builder.Services.AddScoped<MarketplaceStoreService>();
+
+// Reviews (013_reviews.sql): a buyer rates the store they bought from, after
+// a completed order. One review per order ever.
+builder.Services.AddScoped<MarketplaceReviewService>();
+
+// Refunds and returns (014_refunds.sql): a buyer requests a return on a paid
+// order, the store owner or an administrator reviews it, and a cash refund is
+// confirmed at the counter.
+builder.Services.AddScoped<MarketplaceRefundService>();
+
+// Email outbox (017_email_outbox.sql): queues receipts and refunds, sent with
+// retries by a hosted service every minute.
+builder.Services.AddScoped<MarketplaceEmailOutboxService>();
+
+// Moderation (015_moderation.sql): blocks, reports, support tickets, and bans.
+builder.Services.AddScoped<MarketplaceModerationService>();
+
+// Rate limiting (016_rate_limiting.sql): fixed-window counters for the actions
+// that need them. The enforcement lives in C#, not in a stored procedure -
+// a previous version of 016 contained one, and its execution crashed the MySQL
+// server and destroyed the cdm_oneserve database.
+builder.Services.AddScoped<MarketplaceRateLimitService>();
+builder.Services.AddScoped<MarketplaceEmailOutboxService>();
+
 
 // LOST & FOUND - all authorship comes from the OneServe JWT, and the
 // `models` live in the same DbContext - no separate FINDDB, no duplicate
@@ -181,6 +222,16 @@ builder.Services.AddScoped<IPushDispatcher, PushDispatcher>();
 // Retries deliveries abandoned by a crashed Node worker, and prunes the
 // outbox / delivery log / dead subscriptions.
 builder.Services.AddHostedService<PushMaintenanceHostedService>();
+
+// Marketplace order expiry (010_order_lifecycle.sql).
+// Releases the stock held by orders that reached ReadyForPickup/Delivered and
+// were never collected. Runs every 5 minutes - cheap (one index seek) and the
+// interval only decides how stale the buyer's view is.
+builder.Services.AddHostedService<MarketplaceOrderExpiryHostedService>();
+
+// Marketplace email outbox (017_email_outbox.sql).
+// Sends queued receipts and refunds with retries. Runs every minute.
+builder.Services.AddHostedService<MarketplaceEmailOutboxHostedService>();
 
 
 // =====================================================

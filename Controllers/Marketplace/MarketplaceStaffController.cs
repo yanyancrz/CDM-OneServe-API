@@ -200,6 +200,28 @@ public class MarketplaceStaffController : MarketplaceControllerBase
             userId, orderId, request.Status, OperatorSession(), ct));
     }
 
+    /// <summary>
+    /// Records that cash was actually taken for an order.
+    ///
+    /// A separate step from releasing or completing the order: it stamps PaidAt
+    /// at the moment the money changes hands, so a cash order can be paid before
+    /// it is collected, and the audit can say when the cash was received rather
+    /// than inferring it from hand-over.
+    ///
+    /// Refuses campus card orders (they were debited at checkout and have their
+    /// own ledger) and already-paid orders (overwriting PaidAt would move the
+    /// one timestamp that matters).
+    ///
+    /// Requires an operator session, like every other staff write.
+    /// </summary>
+    [HttpPost("orders/{orderId:int}/cash-payment")]
+    public async Task<IActionResult> ConfirmCash(int orderId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+
+        return ToAction(await _orders.ConfirmCashAsync(userId, orderId, OperatorSession(), ct));
+    }
+
     // ==========================================================
     // products
     // ==========================================================

@@ -21,7 +21,7 @@ public class MarketplaceAuditService
         int? productId,
         int? variantId,
         int workspaceId,
-        int actorUserId,
+        int? actorUserId,
         string? operatorName,
         string? idLast3,
         int previousQuantity,

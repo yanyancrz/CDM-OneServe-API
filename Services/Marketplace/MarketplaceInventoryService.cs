@@ -25,9 +25,18 @@ namespace CDM_OneServe_API.Services.Marketplace;
 /// One stock movement's audit context, carried from the caller that owns the
 /// surrounding workflow (staff screen, checkout, completion, cancellation).
 /// </summary>
+/// <summary>
+/// One stock movement's audit context, carried from the caller that owns the
+/// surrounding workflow (staff screen, checkout, completion, cancellation,
+/// expiry).
+///
+/// ActorUserId is nullable: a movement caused by a background schedule has no
+/// human to attribute it to, and that is a fact the audit row should record
+/// rather than inventing a user id for. See 011_system_audit_actor.sql.
+/// </summary>
 public sealed record MarketplaceStockAudit(
     int WorkspaceId,
-    int ActorUserId,
+    int? ActorUserId,
     string? OperatorName,
     string? IdLast3,
     int? OrderId,
@@ -281,15 +290,113 @@ public class MarketplaceInventoryService
     }
 
     /// <summary>
+    /// Claims an order's stock settle, returning true for exactly ONE caller.
+    ///
+    /// This is the idempotency lock for the whole order lifecycle, added by
+    /// 010_order_lifecycle.sql.
+    ///
+    /// WHY IT HAS TO BE AT THE ORDER LEVEL
+    ///   <see cref="ReleaseAsync"/> can only ask "does this SKU have a hold of at
+    ///   least this much", because it does not know which order the hold belongs
+    ///   to. That is enough to stop a negative count and not enough to stop a
+    ///   double release: a second cancellation of an already-cancelled order
+    ///   finds ANOTHER order's reservation on the same product and eats it,
+    ///   starving a live order.
+    ///
+    ///   So the caller claims the order's StockSettled flag first, with a
+    ///   conditional UPDATE. Only the caller whose UPDATE affected one row may
+    ///   touch inventory. Two concurrent callers cannot both win a conditional
+    ///   UPDATE, so this is a lock rather than a check - and it needs no explicit
+    ///   transaction, because MySQL's row lock on the order row is held for the
+    ///   duration of the UPDATE statement.
+    ///
+    /// Stock may legitimately be released, consumed, or left alone, so this only
+    /// answers "is this still yours to act on", never "what should happen".
+    /// </summary>
+    public async Task<bool> TryClaimStockSettleAsync(int orderId, CancellationToken ct = default)
+    {
+        var affected = await _db.MarketplaceOrders
+            .Where(o => o.OrderId == orderId && !o.StockSettled)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(o => o.StockSettled, true), ct);
+
+        return affected == 1;
+    }
+
+    /// <summary>
+    /// Gives back every hold on an order, exactly once.
+    ///
+    /// The order's StockSettled flag is claimed first; if somebody else already
+    /// holds it this is a no-op, and the caller must then leave the order row
+    /// alone too rather than writing a second cancellation over the first.
+    /// </summary>
+    public async Task<bool> ReleaseOrderStockOnceAsync(
+        MarketplaceOrder order,
+        int? actorUserId,
+        string? operatorName,
+        string? idLast3,
+        string reason,
+        string actionType = "Cancellation",
+        CancellationToken ct = default)
+    {
+        if (!await TryClaimStockSettleAsync(order.OrderId, ct)) return false;
+
+        await ReleaseOrderLinesAsync(order, actorUserId, operatorName, idLast3, reason, actionType, ct);
+        return true;
+    }
+
+    /// <summary>
+    /// The per-line release, with no idempotency of its own - the caller must
+    /// have claimed the settle flag first.
+    ///
+    /// internal rather than public: it is an implementation detail, but the expiry
+    /// job (MarketplaceOrderService) and the order service both need it, and they
+    /// live in this assembly.
+    /// </summary>
+    internal async Task ReleaseOrderLinesAsync(
+        MarketplaceOrder order,
+        int? actorUserId,
+        string? operatorName,
+        string? idLast3,
+        string reason,
+        string actionType,
+        CancellationToken ct)
+    {
+        foreach (var item in order.Items)
+        {
+            if (item.ProductId is not int productId) continue;
+
+            // Post-migration every order carries its workspace; the lookup is
+            // only a backstop so an audit row can never break a settle.
+            var workspaceId = order.WorkspaceId ?? await _db.MarketplaceProducts
+                .Where(p => p.ProductId == productId)
+                .Select(p => p.WorkspaceId)
+                .FirstOrDefaultAsync(ct) ?? 0;
+
+            MarketplaceStockAudit? audit = workspaceId == 0 ? null : new MarketplaceStockAudit(
+                workspaceId, actorUserId, operatorName, idLast3, order.OrderId, reason);
+
+            await ReleaseAsync(productId, item.VariantId, item.Quantity, audit, ct, actionType);
+        }
+    }
+
+    /// <summary>
     /// Releases a reservation - used when an order is cancelled or expires
-    /// unpaid. The stock stays on the shelf; only the hold goes away.
+    /// uncollected. The stock stays on the shelf; only the hold goes away.
+    ///
+    /// Deliberately NOT idempotent on its own: it cannot tell "release this
+    /// order's hold" from "release any hold of this size", because it has no idea
+    /// which order it is acting for. Callers acting on an order must go through
+    /// <see cref="ReleaseOrderStockOnceAsync"/>, which claims the settle flag
+    /// first.
     /// </summary>
     public async Task ReleaseAsync(
         int productId,
         int? variantId,
         int quantity,
         MarketplaceStockAudit? audit,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string actionType = "Cancellation")
     {
         if (quantity <= 0) return;
 
@@ -309,7 +416,7 @@ public class MarketplaceInventoryService
             .FirstOrDefaultAsync(ct);
 
         _audit.Record(productId, variantId, audit.WorkspaceId, audit.ActorUserId,
-            audit.OperatorName, audit.IdLast3, stock, -quantity, "Cancellation", audit.Reason, audit.OrderId);
+            audit.OperatorName, audit.IdLast3, stock, -quantity, actionType, audit.Reason, audit.OrderId);
     }
 
     /// <summary>

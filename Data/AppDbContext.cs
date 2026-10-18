@@ -72,7 +72,14 @@ public class AppDbContext : DbContext
 
 
     // =========================
-    // SCHOOL RECORDS
+    // SCHOOL RECORDS (official ID registry)
+    // Registration is allowed only for IDs in this table.
+    // =========================
+
+    public DbSet<SchoolRecord> SchoolRecords { get; set; } = null!;
+
+    // =========================
+    // SCHOOL ATTENDANCE (library)
     // =========================
 
     public DbSet<LibraryAttendance> LibraryAttendances { get; set; }
@@ -124,6 +131,60 @@ public class AppDbContext : DbContext
     public DbSet<MarketplaceStallAccount> MarketplaceStallAccounts { get; set; } = null!;
     public DbSet<MarketplaceOperatorSession> MarketplaceOperatorSessions { get; set; } = null!;
     public DbSet<MarketplaceInventoryTransaction> MarketplaceInventoryTransactions { get; set; } = null!;
+
+    // CAMPUS SERVICES (003_campus_services.sql)
+    // Canteen pre-ordering + order claim codes live on MarketplaceOrder
+    // itself; these three are new tables.
+    // =========================
+
+    public DbSet<MarketplaceCampusCard> MarketplaceCampusCards { get; set; } = null!;
+    public DbSet<MarketplaceCardTransaction> MarketplaceCardTransactions { get; set; } = null!;
+    public DbSet<MarketplaceIdClaim> MarketplaceIdClaims { get; set; } = null!;
+
+    // STOREFRONTS (006_storefronts.sql)
+    // The seller/staffront layer on top of the workspace-scoped fulfilment
+    // model. marketplace_stores.WorkspaceId is the bridge.
+    // =========================
+
+    public DbSet<MarketplaceStore> MarketplaceStores { get; set; } = null!;
+    public DbSet<MarketplaceStoreMember> MarketplaceStoreMembers { get; set; } = null!;
+    public DbSet<MarketplaceStorePermission> MarketplaceStorePermissions { get; set; } = null!;
+    public DbSet<MarketplaceStoreApplication> MarketplaceStoreApplications { get; set; } = null!;
+
+    // SELLER ONBOARDING (012_seller_applications.sql)
+    // =========================
+
+    public DbSet<MarketplaceSellerApplication> MarketplaceSellerApplications { get; set; } = null!;
+    public DbSet<MarketplaceCategory> MarketplaceCategories { get; set; } = null!;
+    public DbSet<MarketplaceProductPhoto> MarketplaceProductPhotos { get; set; } = null!;
+
+    // REVIEWS (013_reviews.sql)
+    // =========================
+
+    public DbSet<MarketplaceReview> MarketplaceReviews { get; set; } = null!;
+    public DbSet<MarketplaceReviewPhoto> MarketplaceReviewPhotos { get; set; } = null!;
+
+    // REFUNDS (014_refunds.sql)
+    // =========================
+
+    public DbSet<MarketplaceRefundRequest> MarketplaceRefundRequests { get; set; } = null!;
+
+    // RATE LIMITING (016_rate_limiting.sql)
+    // =========================
+
+    public DbSet<MarketplaceRateLimit> MarketplaceRateLimits { get; set; } = null!;
+
+    // EMAIL OUTBOX (017_email_outbox.sql)
+    // =========================
+
+    public DbSet<MarketplaceEmailOutbox> MarketplaceEmailOutbox { get; set; } = null!;
+
+    // MODERATION (015_moderation.sql)
+    // =========================
+
+    public DbSet<MarketplaceBlock> MarketplaceBlocks { get; set; } = null!;
+    public DbSet<MarketplaceReport> MarketplaceReports { get; set; } = null!;
+    public DbSet<MarketplaceSupportTicket> MarketplaceSupportTickets { get; set; } = null!;
 
     // LOST & FOUND (ported from the standalone FIND system)
     // Uses the existing `users` table for authorship; no FIND users table.
@@ -198,8 +259,16 @@ public class AppDbContext : DbContext
 
 
         // =========================
-        // SCHOOL RECORDS
+        // SCHOOL RECORDS (official ID registry)
         // =========================
+
+        modelBuilder.Entity<SchoolRecord>(e =>
+        {
+            e.ToTable("school_records");
+            e.HasIndex(x => x.IdNumber).IsUnique();
+            e.Property(x => x.IdNumber).HasMaxLength(50);
+            e.Property(x => x.Role).HasMaxLength(20);
+        });
 
         modelBuilder.Entity<LibraryAttendance>()
             .ToTable("library_attendance");
@@ -352,6 +421,12 @@ public class AppDbContext : DbContext
             // SetNull: history (orders, audit) outlives a workspace link.
             e.HasOne(x => x.Workspace).WithMany()
                 .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.SetNull);
+            // Storefront category (006_storefronts.sql). Nullable and SET NULL,
+            // so removing a category never deletes a product - the legacy
+            // Category/SubCategory strings stay as the fallback for the 16
+            // products that predate storefronts.
+            e.HasOne(x => x.StoreCategory).WithMany()
+                .HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<MarketplaceProductVariant>(e =>
@@ -399,10 +474,17 @@ public class AppDbContext : DbContext
             e.Property(x => x.PaymentMethod).HasMaxLength(16);
             e.Property(x => x.Status).HasMaxLength(24);
             e.Property(x => x.PaymentStatus).HasMaxLength(16);
+            // 003_campus_services.sql: the claim code is a fixed 8-char ascii
+            // string so the UNIQUE index stays a plain seek.
+            e.Property(x => x.ClaimCode).HasMaxLength(8).IsFixedLength();
             // A campus location must not disappear while an order points at it.
             e.HasOne(x => x.CampusLocation).WithMany()
                 .HasForeignKey(x => x.CampusLocationId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            // The staff member who released the order. SetNull: order history
+            // must outlive a deleted account.
+            e.HasOne(x => x.ClaimedByUser).WithMany()
+                .HasForeignKey(x => x.ClaimedByUserId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Workspace).WithMany()
                 .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.SetNull);
             e.HasMany(x => x.Items).WithOne(x => x.Order)
@@ -513,6 +595,319 @@ public class AppDbContext : DbContext
                 .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Order).WithMany()
                 .HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // =====================================================
+        // CAMPUS SERVICES
+        // Created by Database/Marketplace/003_campus_services.sql.
+        // The CHECK constraints (a card balance never negative, a ledger amount
+        // always positive) and the UNIQUE generated column that allows only one
+        // open ID claim per user live in that script; this block only mirrors
+        // the column shapes so EF reads the tables correctly.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceCampusCard>(e =>
+        {
+            e.ToTable("marketplace_campus_cards");
+            e.HasKey(x => x.CardId);
+            e.Property(x => x.CardNumber).HasMaxLength(24);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasMany(x => x.Transactions).WithOne(x => x.Card)
+                .HasForeignKey(x => x.CardId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MarketplaceCardTransaction>(e =>
+        {
+            e.ToTable("marketplace_card_transactions");
+            e.HasKey(x => x.TransactionId);
+            // bigint, not int: a busy canteen can outgrow 2^31 movements.
+            e.Property(x => x.TransactionId).ValueGeneratedOnAdd();
+            e.Property(x => x.Type).HasMaxLength(12);
+            e.Property(x => x.OperatorName).HasMaxLength(120);
+            e.Property(x => x.Notes).HasMaxLength(300);
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.PerformedByUser).WithMany()
+                .HasForeignKey(x => x.PerformedByUserId).OnDelete(DeleteBehavior.SetNull);
+            // SetNull: the ledger outlives a deleted order.
+            e.HasOne(x => x.Order).WithMany()
+                .HasForeignKey(x => x.ReferenceOrderId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MarketplaceIdClaim>(e =>
+        {
+            e.ToTable("marketplace_id_claims");
+            e.HasKey(x => x.IdClaimId);
+            e.Property(x => x.ClaimType).HasMaxLength(16);
+            e.Property(x => x.Reason).HasMaxLength(500);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.Property(x => x.ClaimCode).HasMaxLength(8).IsFixedLength();
+            e.Property(x => x.ReviewNotes).HasMaxLength(500);
+            // OpenUserId is a VIRTUAL generated column computed by the
+            // database (see 003). EF must never try to write it.
+            e.Property(x => x.OpenUserId).ValueGeneratedOnAddOrUpdate();
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.ReviewedByUser).WithMany()
+                .HasForeignKey(x => x.ReviewedByUserId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // =====================================================
+        // STOREFRONTS
+        // Created by Database/Marketplace/006_storefronts.sql.
+        //
+        // The CHECK constraint on marketplace_store_permissions.Permission (the
+        // closed five-permission allow-list) and the UNIQUE generated columns
+        // (categories.StoreKey, store_applications.PendingUserId) live in that
+        // script; this block only mirrors column shapes so EF reads them
+        // correctly. The generated columns must never be written by EF.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceStore>(e =>
+        {
+            e.ToTable("marketplace_stores");
+            e.HasKey(x => x.StoreId);
+            e.Property(x => x.Name).HasMaxLength(100);
+            e.Property(x => x.Description).HasMaxLength(3000);
+            e.Property(x => x.Kind).HasMaxLength(16);
+            e.Property(x => x.Location).HasMaxLength(200);
+            e.Property(x => x.PhotoUrl).HasMaxLength(255);
+            e.Property(x => x.BannerUrl).HasMaxLength(255);
+            e.Property(x => x.Status).HasMaxLength(16);
+            // SetNull: a deleted account must not erase the storefront's history.
+            e.HasOne(x => x.OwnerUser).WithMany()
+                .HasForeignKey(x => x.OwnerUserId).OnDelete(DeleteBehavior.SetNull);
+            // SetNull: the store outlives a retired workspace.
+            e.HasOne(x => x.Workspace).WithMany()
+                .HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MarketplaceStoreMember>(e =>
+        {
+            e.ToTable("marketplace_store_members");
+            // Surrogate PK. The natural key (StoreId, UserId) is a UNIQUE, not the
+            // PK - see the note on MarketplaceStoreMember.MemberId and 008.
+            e.HasKey(x => x.MemberId);
+            e.HasIndex(x => new { x.StoreId, x.UserId }).IsUnique();
+            e.Property(x => x.Position).HasMaxLength(120);
+            e.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Cascade);
+            // Cascade: a deleted account leaves the team.
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.AssignedByUser).WithMany()
+                .HasForeignKey(x => x.AssignedBy).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MarketplaceStorePermission>(e =>
+        {
+            e.ToTable("marketplace_store_permissions");
+            e.HasKey(x => new { x.MemberId, x.Permission });
+            e.Property(x => x.Permission).HasMaxLength(16);
+            // The FK runs through MemberId alone. Pointing it at (StoreId, UserId)
+            // would overlap the member's own StoreId foreign key and EF would
+            // create a shadow property - 008 has the full explanation.
+            e.HasOne(x => x.Member).WithMany(x => x.Permissions)
+                .HasForeignKey(x => x.MemberId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MarketplaceStoreApplication>(e =>
+        {
+            e.ToTable("marketplace_store_applications");
+            e.HasKey(x => x.ApplicationId);
+            e.Property(x => x.Position).HasMaxLength(120);
+            e.Property(x => x.Message).HasMaxLength(1000);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.Property(x => x.ReviewNote).HasMaxLength(500);
+            // PendingUserId is a VIRTUAL generated column computed by the
+            // database; the UNIQUE key on it is the double-tap guard.
+            e.Property(x => x.PendingUserId).ValueGeneratedOnAddOrUpdate();
+            e.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.ReviewedByUser).WithMany()
+                .HasForeignKey(x => x.ReviewedBy).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MarketplaceCategory>(e =>
+        {
+            e.ToTable("marketplace_categories");
+            e.HasKey(x => x.CategoryId);
+            e.Property(x => x.Name).HasMaxLength(80);
+            // StoreKey is a VIRTUAL generated column (COALESCE(StoreId, 0)) that
+            // makes the UNIQUE (StoreKey, Name) key actually cover system rows.
+            // EF must never select or write it.
+            e.Property(x => x.StoreKey).ValueGeneratedOnAddOrUpdate();
+            // Cascade: a deleted storefront takes its private categories with it.
+            e.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MarketplaceProductPhoto>(e =>
+        {
+            e.ToTable("marketplace_product_photos");
+            e.HasKey(x => x.PhotoId);
+            e.Property(x => x.Url).HasMaxLength(2048);
+            e.HasOne(x => x.Product).WithMany()
+                .HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // =====================================================
+        // SELLER ONBOARDING
+        // Created by Database/Marketplace/012_seller_applications.sql.
+        // PendingUserId is a VIRTUAL generated column computed by the database.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceSellerApplication>(e =>
+        {
+            e.ToTable("marketplace_seller_applications");
+            e.HasKey(x => x.ApplicationId);
+            e.Property(x => x.BusinessName).HasMaxLength(100);
+            e.Property(x => x.Description).HasMaxLength(3000);
+            e.Property(x => x.DocumentPath).HasMaxLength(500);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.Property(x => x.ReviewNote).HasMaxLength(500);
+            // PendingUserId is a VIRTUAL generated column. EF must never write it.
+            e.Property(x => x.PendingUserId).ValueGeneratedOnAddOrUpdate();
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.ReviewedByUser).WithMany()
+                .HasForeignKey(x => x.ReviewedBy).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // =====================================================
+        // REVIEWS
+        // Created by Database/Marketplace/013_reviews.sql.
+        // Rating is a TINYINT with a CHECK constraint in the database; EF only
+        // mirrors the column shape. OrderId and UserId are SET NULL on delete so
+        // a review outlives both its order and its author.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceReview>(e =>
+        {
+            e.ToTable("marketplace_reviews");
+            e.HasKey(x => x.ReviewId);
+            e.Property(x => x.Rating).HasColumnType("tinyint");
+            e.Property(x => x.Body).HasMaxLength(2000);
+            e.HasOne(x => x.Order).WithMany()
+                .HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MarketplaceReviewPhoto>(e =>
+        {
+            e.ToTable("marketplace_review_photos");
+            e.HasKey(x => x.PhotoId);
+            e.Property(x => x.Url).HasMaxLength(2048);
+            // WithMany() with no name disables the collection, which makes EF
+            // invent a shadow FK named MarketplaceReviewReviewId. Name the
+            // collection explicitly so it binds to MarketplaceReview.Photos.
+            e.HasOne(x => x.Review).WithMany(x => x.Photos)
+                .HasForeignKey(x => x.ReviewId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // =====================================================
+        // REFUNDS
+        // Created by Database/Marketplace/014_refunds.sql.
+        // OrderId is the primary key: one request per order ever.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceRefundRequest>(e =>
+        {
+            e.ToTable("marketplace_refund_requests");
+            e.HasKey(x => x.OrderId);
+            e.Property(x => x.Reason).HasMaxLength(2000);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.Property(x => x.ReviewNote).HasMaxLength(500);
+            e.HasOne(x => x.Order).WithMany()
+                .HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.ReviewedByUser).WithMany()
+                .HasForeignKey(x => x.ReviewedBy).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // =====================================================
+        // MODERATION
+        // Created by Database/Marketplace/015_moderation.sql.
+        // A block targets exactly one of user or store (CHECK constraint).
+        // A report targets exactly one of user or store.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceBlock>(e =>
+        {
+            e.ToTable("marketplace_blocks");
+            e.HasKey(x => x.BlockId);
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.TargetUser).WithMany()
+                .HasForeignKey(x => x.TargetUserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.TargetStore).WithMany()
+                .HasForeignKey(x => x.TargetStoreId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MarketplaceReport>(e =>
+        {
+            e.ToTable("marketplace_reports");
+            e.HasKey(x => x.ReportId);
+            e.Property(x => x.Reason).HasMaxLength(2000);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.Property(x => x.Resolution).HasMaxLength(2000);
+            e.HasOne(x => x.Reporter).WithMany()
+                .HasForeignKey(x => x.ReporterId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.TargetUser).WithMany()
+                .HasForeignKey(x => x.TargetUserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.TargetStore).WithMany()
+                .HasForeignKey(x => x.TargetStoreId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.ReviewedByUser).WithMany()
+                .HasForeignKey(x => x.ReviewedBy).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MarketplaceSupportTicket>(e =>
+        {
+            e.ToTable("marketplace_support_tickets");
+            e.HasKey(x => x.TicketId);
+            e.Property(x => x.Subject).HasMaxLength(150);
+            e.Property(x => x.Body).HasMaxLength(3000);
+            e.Property(x => x.Status).HasMaxLength(16);
+            e.Property(x => x.Response).HasMaxLength(3000);
+            e.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.RespondedByUser).WithMany()
+                .HasForeignKey(x => x.RespondedBy).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // =====================================================
+        // RATE LIMITING
+        // Created by Database/Marketplace/016_rate_limiting.sql.
+        // The primary key is the hashed key (varchar 128). No FK.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceRateLimit>(e =>
+        {
+            e.ToTable("marketplace_rate_limits");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasMaxLength(128);
+            e.Property(x => x.WindowStart).HasColumnType("datetime(6)");
+        });
+
+        // =====================================================
+        // EMAIL OUTBOX
+        // Created by Database/Marketplace/017_email_outbox.sql.
+        // One of each kind per order, enforced by the UNIQUE (OrderId, Kind) key.
+        // =====================================================
+
+        modelBuilder.Entity<MarketplaceEmailOutbox>(e =>
+        {
+            e.ToTable("marketplace_email_outbox");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Kind).HasMaxLength(16);
+            e.Property(x => x.LeaseId).HasMaxLength(36).IsFixedLength();
+            e.Property(x => x.ProviderEmailId).HasMaxLength(128);
+            e.Property(x => x.LastError).HasMaxLength(500);
+            e.HasOne(x => x.Order).WithMany()
+                .HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // =====================================================

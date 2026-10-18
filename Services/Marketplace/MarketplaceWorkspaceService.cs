@@ -494,7 +494,12 @@ public class MarketplaceWorkspaceService
                 WorkspaceId = t.WorkspaceId,
                 WorkspaceName = t.Workspace?.Name ?? "",
                 ActorUserId = t.ActorUserId,
-                ActorName = actorNames.TryGetValue(t.ActorUserId, out var n) ? n : "",
+                // Null actor = a movement a background schedule caused, not a
+                // person. The staff screen should say so rather than show a blank
+                // that reads like missing data.
+                ActorName = t.ActorUserId.HasValue
+                    ? (actorNames.TryGetValue(t.ActorUserId.Value, out var n) ? n : "")
+                    : "System",
                 OperatorName = t.OperatorName ?? "",
                 IdLast3 = t.IdLast3 ?? "",
                 PreviousQuantity = t.PreviousQuantity,

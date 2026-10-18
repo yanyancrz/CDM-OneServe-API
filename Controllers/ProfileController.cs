@@ -73,6 +73,47 @@ public class ProfileController : ControllerBase
             user.IsProfileComplete;
 
         // =====================================================
+        // NAME (completed here, not in Registration)
+        // =====================================================
+
+        var firstName = request.FirstName?.Trim() ?? "";
+        var middleName = request.MiddleName?.Trim() ?? "";
+        var lastName = request.LastName?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(firstName))
+        {
+            return BadRequest("First Name is required");
+        }
+
+        if (string.IsNullOrWhiteSpace(lastName))
+        {
+            return BadRequest("Last Name is required");
+        }
+
+        user.FullName = string.Join(
+            " ",
+            new[] { firstName, middleName, lastName }
+                .Where(x => !string.IsNullOrWhiteSpace(x)));
+
+        // =====================================================
+        // ROLE (confirmed here via "I am a Student or Faculty").
+        // IdNumber is NEVER touched: it was fixed at
+        // Registration from the School Records and is read-only.
+        // =====================================================
+
+        if (!string.IsNullOrWhiteSpace(request.Role))
+        {
+            var newRole = request.Role.Trim();
+
+            if (newRole != "Student" && newRole != "Faculty")
+            {
+                return BadRequest("Invalid role.");
+            }
+
+            user.Role = newRole;
+        }
+
+        // =====================================================
         // USER PROFILE INFORMATION
         // =====================================================
 

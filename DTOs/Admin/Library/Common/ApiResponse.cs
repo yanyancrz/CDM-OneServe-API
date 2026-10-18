@@ -13,7 +13,12 @@ public class ApiResponse<T>
 {
     public bool Success { get; set; }
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    // WhenWritingDefault rather than WhenWritingNull: T can be a value type
+    // (bool, int) when a service returns MarketplaceResult<bool>, and
+    // WhenWritingNull is not valid on a value-type member even when T is
+    // Nullable<T>. Default for reference types is null, so the behaviour is
+    // unchanged for every existing caller.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public T? Data { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

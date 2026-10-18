@@ -335,7 +335,6 @@ CREATE TABLE IF NOT EXISTS `marketplace_orders` (
     -- Makes the idempotency check an index seek instead of a table scan.
     INDEX `IX_marketplace_orders_Idempotency` (`UserId`,`IdempotencyKey`),
     -- Makes the idempotency check an index seek instead of a scan.
-    INDEX `IX_marketplace_orders_Idempotency` (`UserId`,`IdempotencyKey`),
     INDEX `IX_marketplace_orders_Status` (`Status`,`FulfillmentMethod`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

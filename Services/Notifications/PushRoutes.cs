@@ -29,6 +29,9 @@ public static class PushRoutes
     public const string MarketplaceStaffOrders = "/marketplace/staff/orders";
     public const string MarketplaceStaffDeliveries = "/marketplace/staff/deliveries";
 
+    // Campus services (003_campus_services.sql).
+    public const string MarketplaceIdClaim = "/marketplace/id-claim";
+
     // ---- Lost & Found ----
     public const string LostFoundHome = "/lost-found";
     public const string LostFoundNotifications = "/lost-found/notifications";
@@ -117,6 +120,21 @@ public static class PushRoutes
             "marketplace:order-status" => MarketplaceOrders,
             "marketplace:order-cancelled" => MarketplaceOrders,
             "marketplace:order-ready-for-delivery" => MarketplaceStaffDeliveries,
+            // A campus card refund (003_campus_services.sql) belongs on the
+            // order the money went back for, not on the generic orders list.
+            "marketplace:order-refunded" => MarketplaceOrders,
+            // Cash taken at the counter (010_order_lifecycle.sql). The buyer
+            // needs to know their order is paid before they walk to collect it.
+            "marketplace:order-cash-confirmed" => MarketplaceOrders,
+            // An uncollected order expiring (010_order_lifecycle.sql) is the one
+            // thing that makes the buyer's order list change without them doing
+            // anything, so it has to land on that list.
+            "marketplace:order-expired" => MarketplaceOrders,
+            // ID claim lifecycle: the user needs to know the moment a claim is
+            // released (they now have a code to bring) or turned down.
+            "marketplace:id-claim-released" => MarketplaceIdClaim,
+            "marketplace:id-claim-claimed" => MarketplaceIdClaim,
+            "marketplace:id-claim-rejected" => MarketplaceIdClaim,
 
             // ---------------- Account ----------------
             "account:verification-approved" => Dashboard,

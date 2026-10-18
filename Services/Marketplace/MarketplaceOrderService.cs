@@ -35,6 +35,9 @@ public class MarketplaceOrderService
     private readonly MarketplaceCatalogService _catalog;
     private readonly MarketplaceOperatorSessionService _sessions;
     private readonly MarketplaceAuditService _audit;
+    private readonly MarketplaceCardService _cards;
+    private readonly MarketplaceClaimService _claims;
+    private readonly MarketplaceEmailOutboxService _outbox;
     private readonly IPushDispatcher _push;
 
     public MarketplaceOrderService(
@@ -44,6 +47,9 @@ public class MarketplaceOrderService
         MarketplaceCatalogService catalog,
         MarketplaceOperatorSessionService sessions,
         MarketplaceAuditService audit,
+        MarketplaceCardService cards,
+        MarketplaceClaimService claims,
+        MarketplaceEmailOutboxService outbox,
         IPushDispatcher push)
     {
         _db = db;
@@ -52,7 +58,127 @@ public class MarketplaceOrderService
         _catalog = catalog;
         _sessions = sessions;
         _audit = audit;
+        _cards = cards;
+        _claims = claims;
+        _outbox = outbox;
         _push = push;
+    }
+
+    // ==========================================================
+    // UNPAID / UNCOLLECTED EXPIRY
+    // ==========================================================
+
+    /// <summary>
+    /// Expires every order that has been sitting at the counter past its
+    /// collect-by deadline, and gives their stock back.
+    ///
+    /// WHAT THIS IS FOR
+    ///   This is the fix for a real inventory leak. A buyer could place a cash
+    ///   order and never collect it, and the hold on
+    ///   marketplace_inventory.ReservedQuantity was never returned - there was no
+    ///   code path at all that touched it for an uncollected order. Worse,
+    ///   MarketplaceOrderStatus.CanCancel forbids cancelling once an order reaches
+    ///   ReadyForPickup, so even a diligent member of staff could not free the
+    ///   units. The leaked hold is self-reinforcing: it trips the guard on
+    ///   MarketplaceInventoryService.SaveAsync ("N unit(s) are reserved by open
+    ///   orders. Cancel or complete those orders first."), so it then blocks the
+    ///   stock from being managed at all.
+    ///
+    /// WHY THE DEADLINE IS 24 HOURS AND NOT THE ORIGINAL'S 10 MINUTES
+    ///   CampusMarket expires an `awaiting_payment` order after ten minutes,
+    ///   which is right there because that status means an unfinished ONLINE
+    ///   payment. Here a cash order is `unpaid` from placement until it is
+    ///   collected at the counter, which is hours - so a ten-minute rule would
+    ///   cancel almost every cash order before the kitchen had started it.
+    ///
+    ///   The deadline therefore starts when the order BECOMES COLLECTABLE, not
+    ///   when it is placed. Before that, staff are actively preparing it and it is
+    ///   not neglected.
+    ///
+    /// WHAT IS SAFE TO EXPIRE
+    ///   Only orders that are both collectable AND past their deadline. Orders
+    ///   created before 010_order_lifecycle.sql have ExpiresAt NULL, so they are
+    ///   left alone: backdating a deadline onto a live order would cancel it
+    ///   with no warning and no chance to react.
+    ///
+    /// Returns the number of orders expired, so the job can log and the test can
+    /// assert without re-querying.
+    /// </summary>
+    public async Task<int> ExpireOverdueOrdersAsync(
+        DateTime nowUtc,
+        int? workspaceId = null,
+        CancellationToken ct = default)
+    {
+        // Only the two "waiting at the counter" steps can be abandoned. Everything
+        // before them is still being prepared, so expiring it would cancel orders
+        // the kitchen has already started.
+        //
+        // The deadline is read here rather than in SQL so the rule stays in one
+        // place - MarketplaceOrderExpiry - and the query stays a plain index seek
+        // on IX_Order_Expiry.
+        // Index seek on IX_Order_Expiry: only orders that have a deadline, only
+        // those still holding a reservation.
+        var query = _db.MarketplaceOrders
+            .Where(o => !o.StockSettled
+                        && o.ExpiresAt != null
+                        && o.ExpiresAt < nowUtc
+                        && MarketplaceOrderExpiry.CollectableStatuses.Contains(o.Status));
+
+        if (workspaceId.HasValue)
+            query = query.Where(o => o.WorkspaceId == workspaceId.Value);
+
+        // Include the lines up front so the per-product release can run without a
+        // second round-trip per order.
+        var orders = await query
+            .Include(o => o.Items)
+            .ToListAsync(ct);
+
+        if (orders.Count == 0) return 0;
+
+        var expired = 0;
+
+        foreach (var order in orders)
+        {
+            // Re-check under the lock. Between the query and now, a concurrent
+            // claim may have settled this order - it must not be expired after it
+            // was collected, and it must not be expired twice.
+            if (order.StockSettled) continue;
+
+            if (order.ExpiresAt is not { } deadline || deadline >= nowUtc) continue;
+
+            // Claim first, then act. Losing the race is normal - a double tap, or
+            // a worker and staff acting together - and the winner has already
+            // written the truth.
+            if (!await _inventory.TryClaimStockSettleAsync(order.OrderId, ct)) continue;
+
+            order.StockSettled = true;
+            order.Status = MarketplaceOrderStatus.Expired;
+            order.CancelledAt = DateTime.UtcNow;
+            order.ExpiryReason = MarketplaceOrderExpiry.UncollectedReason;
+            order.UpdatedAt = DateTime.UtcNow;
+
+            // No actor: this is a scheduled expiry, not a person's action. The
+            // audit row records the movement with a NULL actor rather than a
+            // fabricated user id - see 011_system_audit_actor.sql.
+            await _inventory.ReleaseOrderLinesAsync(
+                order, actorUserId: null, operatorName: null, idLast3: null,
+                MarketplaceOrderExpiry.UncollectedReason, "Expired", ct);
+
+            expired++;
+
+            await PushOrderAsync(
+                order.UserId,
+                "order-expired",
+                "Order expired",
+                $"Order {order.OrderReference} expired: {MarketplaceOrderExpiry.UncollectedReason}.",
+                $"orderexpired:{order.OrderId}",
+                ct);
+        }
+
+        if (expired > 0)
+            await _db.SaveChangesAsync(ct);
+
+        return expired;
     }
 
     // ==========================================================
@@ -163,6 +289,7 @@ public class MarketplaceOrderService
             var replayed = await _db.MarketplaceOrders
                 .Where(o => o.UserId == userId && o.RequestKey == request.RequestKey)
                 .Include(o => o.CampusLocation)
+                .Include(o => o.ClaimedByUser)
                 .Include(o => o.Workspace)
                 .Include(o => o.Items)
                 .OrderBy(o => o.OrderId)
@@ -180,10 +307,26 @@ public class MarketplaceOrderService
         }
 
         var method = MarketplaceFulfillment.Normalize(request.FulfillmentMethod);
-        var paymentMethod = string.IsNullOrWhiteSpace(request.PaymentMethod) ? "cash" : request.PaymentMethod;
+        var paymentMethod = MarketplacePaymentMethod.Normalize(request.PaymentMethod);
 
-        if (paymentMethod is not ("cash" or "online"))
+        // "online" was the placeholder the original column was reserved for.
+        // The only alternative to cash is now the campus card, so a client still
+        // sending "online" is a 400 rather than a silently unpaid order.
+        if (request.PaymentMethod is not null
+            && request.PaymentMethod.Trim().Length > 0
+            && !MarketplacePaymentMethod.IsValid(request.PaymentMethod))
             return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest("Choose a valid payment method.");
+
+        // ===== pre-ordering (003_campus_services.sql) =====
+        // A booked slot only makes sense for pickup, so a slot sent with a
+        // delivery method is dropped rather than silently accepted - a meal
+        // arriving at a room cannot honour a 12:00 slot.
+        var isPreOrder = method == MarketplacePreOrder.FulfillmentMethod && request.ScheduledFor.HasValue;
+        var scheduledFor = isPreOrder ? request.ScheduledFor : null;
+
+        var slotError = MarketplacePreOrder.Validate(scheduledFor, DateTime.UtcNow);
+        if (slotError is not null)
+            return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(slotError);
 
         // ----- the cart -----
         var cart = await _db.MarketplaceCartItems
@@ -334,7 +477,12 @@ public class MarketplaceOrderService
                 RequestKey = request.RequestKey == Guid.Empty ? null : request.RequestKey,
                 FulfillmentMethod = method,
                 PaymentMethod = paymentMethod,
+                IsPreOrder = isPreOrder,
+                ScheduledFor = scheduledFor,
                 Status = MarketplaceOrderStatus.Pending,
+                // A campus card order is settled further down this method, once
+                // the stock is safely reserved - so it starts unpaid like the
+                // rest and is only marked paid after the debit succeeds.
                 PaymentStatus = "unpaid",
                 SubtotalCentavos = groupSubtotal,
                 DeliveryFeeCentavos = deliveryFee,
@@ -424,6 +572,59 @@ public class MarketplaceOrderService
                     $"\"{shortProduct}\" just sold out. Please review your cart.");
             }
 
+            // ----- settle a campus card order, now that the stock is safe -----
+            // Only here: before this point the order is rolled back on failure,
+            // and after it the buyer owns a real order. Debiting earlier would
+            // take the money for an order that might not survive.
+            if (paymentMethod == MarketplacePaymentMethod.CampusCard)
+            {
+                var charge = await _cards.DebitForOrderAsync(order, ct);
+
+                if (!charge.Success)
+                {
+                    // Same rollback as a stock failure: give the stock back and
+                    // delete every order this call created, including this one.
+                    foreach (var (productId, variantId, quantity) in reserved)
+                        await _inventory.ReleaseAsync(productId, variantId, quantity, null, ct);
+
+                    foreach (var created in createdThisCall)
+                    {
+                        foreach (var item in created.Items)
+                        {
+                            if (item.ProductId is not int productId) continue;
+                            await _inventory.ReleaseAsync(
+                                productId, item.VariantId, item.Quantity, null, ct);
+                        }
+
+                        _db.MarketplaceOrders.Remove(created);
+                    }
+
+                    _db.MarketplaceOrders.Remove(order);
+                    await _db.SaveChangesAsync(ct);
+
+                    return MarketplaceResult<MarketplacePlacedOrdersDto>.BadRequest(
+                        charge.Message ?? "Your campus card could not be charged.");
+                }
+
+                order.PaymentStatus = "paid";
+                await _db.SaveChangesAsync(ct);
+
+                // Queue the receipt email. The outbox worker sends it with retries,
+                // so a transient SMTP failure never loses the receipt.
+                await _outbox.QueueReceiptAsync(order.OrderId, ct);
+            }
+
+            // ----- issue a claim code for anything collected at the counter -----
+            // Cash-on-pickup and every pre-order are handed over in person, so
+            // both need a code. Delivery already proves identity by room, and a
+            // card order is already paid, so neither does.
+            var needsClaimCode =
+                paymentMethod != MarketplacePaymentMethod.CampusCard
+                && (isPreOrder || method == MarketplaceFulfillment.Pickup);
+
+            if (needsClaimCode)
+                order.ClaimCode = await _claims.NextClaimCodeAsync(ct);
+
             placedOrders.Add(order);
             createdThisCall.Add(order);
         }
@@ -437,6 +638,7 @@ public class MarketplaceOrderService
         var placed = await _db.MarketplaceOrders
             .Where(o => orderedIds.Contains(o.OrderId))
             .Include(o => o.CampusLocation)
+            .Include(o => o.ClaimedByUser)
             .Include(o => o.Workspace)
             .Include(o => o.Items)
             .OrderBy(o => o.OrderId)
@@ -502,6 +704,7 @@ public class MarketplaceOrderService
         var orders = await _db.MarketplaceOrders.AsNoTracking()
             .Where(o => o.UserId == userId)
             .Include(o => o.CampusLocation)
+            .Include(o => o.ClaimedByUser)
             .Include(o => o.Workspace)
             .Include(o => o.Items)
             .OrderByDescending(o => o.CreatedAt)
@@ -528,6 +731,7 @@ public class MarketplaceOrderService
         var order = await _db.MarketplaceOrders.AsNoTracking()
             .Where(o => o.OrderId == orderId && o.UserId == userId)
             .Include(o => o.CampusLocation)
+            .Include(o => o.ClaimedByUser)
             .Include(o => o.Workspace)
             .Include(o => o.Items)
             .FirstOrDefaultAsync(ct);
@@ -607,6 +811,7 @@ public class MarketplaceOrderService
         var orders = await _db.MarketplaceOrders.AsNoTracking()
             .Where(o => scope == null || o.WorkspaceId == scope)
             .Include(o => o.CampusLocation)
+            .Include(o => o.ClaimedByUser)
             .Include(o => o.Workspace)
             .Include(o => o.Items)
             .OrderByDescending(o => o.CreatedAt)
@@ -686,6 +891,7 @@ public class MarketplaceOrderService
             .Where(o => o.OrderId == orderId &&
                         (scope == null || o.WorkspaceId == scope))
             .Include(o => o.CampusLocation)
+            .Include(o => o.ClaimedByUser)
             .Include(o => o.Workspace)
             .Include(o => o.Items)
             .FirstOrDefaultAsync(ct);
@@ -758,6 +964,28 @@ public class MarketplaceOrderService
         {
             // Campus is cash-on-hand, so completing implies the money changed hands.
             order.PaymentStatus = "paid";
+            order.PaidAt = DateTime.UtcNow;
+
+            // Queue the receipt so the buyer gets proof of payment.
+            await _outbox.QueueReceiptAsync(order.OrderId, ct);
+        }
+
+        // The collect-by deadline starts HERE, not at placement.
+        //
+        // A cash order is `unpaid` from the moment it is placed until the buyer
+        // collects it at the counter - hours, not minutes. So the deadline cannot
+        // be measured from placement without cancelling nearly every cash order
+        // before the kitchen has started it. It is measured from the moment the
+        // order is actually sitting at the counter waiting, which is the only
+        // point at which it can be abandoned.
+        //
+        // Only set when there is not already one: an order that was already
+        // collectable before 010_order_lifecycle.sql has ExpiresAt NULL, and
+        // backdating a deadline onto a live order would cancel it with no warning.
+        if (order.ExpiresAt is null &&
+            MarketplaceOrderExpiry.IsCollectable(next))
+        {
+            order.ExpiresAt = DateTime.UtcNow.Add(MarketplaceOrderExpiry.CollectableWindow);
         }
 
         order.Status = next;
@@ -784,21 +1012,122 @@ public class MarketplaceOrderService
         {
             order.CompletedAt = DateTime.UtcNow;
 
-            foreach (var item in order.Items)
+            // Same lock as cancellation. Completing CONSUMES the hold rather than
+            // returning it, but it settles the order just as finally - so a
+            // completed order and a claim-released order must not both be able to
+            // consume the same reservation.
+            if (await _inventory.TryClaimStockSettleAsync(order.OrderId, ct))
             {
-                if (item.ProductId is not int productId) continue;
+                order.StockSettled = true;
 
-                var audit = new MarketplaceStockAudit(
-                    order.WorkspaceId ?? attribution.WorkspaceId, staffId,
-                    attribution.OperatorName, attribution.IdLast3, order.OrderId, Reason: null);
+                foreach (var item in order.Items)
+                {
+                    if (item.ProductId is not int productId) continue;
 
-                await _inventory.ConsumeAsync(productId, item.VariantId, item.Quantity, audit, ct);
+                    var audit = new MarketplaceStockAudit(
+                        order.WorkspaceId ?? attribution.WorkspaceId, staffId,
+                        attribution.OperatorName, attribution.IdLast3, order.OrderId, Reason: null);
+
+                    await _inventory.ConsumeAsync(productId, item.VariantId, item.Quantity, audit, ct);
+                }
             }
         }
 
         await _db.SaveChangesAsync(ct);
 
         return MarketplaceResult<object>.Ok(new { }, $"Order is now {next}.");
+    }
+
+    // ==========================================================
+    // CASH PAYMENT CONFIRMATION
+    // ==========================================================
+
+    /// <summary>
+    /// Records that cash was actually taken for an order.
+    ///
+    /// WHY THIS IS A SEPARATE STEP
+    ///   Before, an order became paid only as a side effect of something else:
+    ///   either the claim code was released at the counter (ClaimService), or the
+    ///   order was walked to Completed. Both of those are moments when money
+    ///   changes hands, so the inference was usually right - but it meant there
+    ///   was no way to record a payment on its own, and therefore no audit trail
+    ///   answering "when was this cash received, and by whom".
+    ///
+    ///   Splitting it out gives three things:
+    ///     * the counter can take cash for an order that is not yet ready;
+    ///     * PaidAt is stamped at the moment of payment, not at hand-over;
+    ///     * a cash order can be paid without being released in the same step.
+    ///
+    /// WHAT IT REFUSES
+    ///   Only a cash order that is still unpaid. A campus card order was debited
+    ///   at checkout and has its own ledger, so confirming it here would double
+    ///   count the money. An already-paid order is refused rather than
+    ///   re-stamped, because overwriting PaidAt would move the one timestamp that
+    ///   says when the money changed hands.
+    ///
+    /// It does NOT touch stock: payment and settlement are separate facts, and
+    /// the hold is released or consumed exactly once by the StockSettled lock.
+    /// </summary>
+    public async Task<MarketplaceResult<MarketplaceOrderDto>> ConfirmCashAsync(
+        int staffId,
+        int orderId,
+        Guid? sessionId,
+        CancellationToken ct = default)
+    {
+        // A mutation, so the same operator-session rule as every other staff
+        // write: the duty shift is what makes "who took the cash" answerable.
+        var (attribution, scopeError) = await _sessions.RequireMutationScopeAsync(
+            staffId, sessionId, targetWorkspaceId: null, ct);
+
+        if (attribution is null)
+            return MarketplaceResult<MarketplaceOrderDto>.Forbidden(scopeError ?? StaffOnly);
+
+        var order = await _db.MarketplaceOrders
+            .Include(o => o.User)
+            .FirstOrDefaultAsync(o => o.OrderId == orderId, ct);
+
+        if (order is null)
+            return MarketplaceResult<MarketplaceOrderDto>.NotFound("Order not found.");
+
+        if (order.WorkspaceId != attribution.WorkspaceId)
+            return MarketplaceResult<MarketplaceOrderDto>.Forbidden(
+                "That order belongs to another workspace.");
+
+        if (order.PaymentMethod == MarketplacePaymentMethod.CampusCard)
+            return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                "That order was paid with a campus card. It cannot be confirmed as cash.");
+
+        if (order.PaymentStatus == "paid")
+            return MarketplaceResult<MarketplaceOrderDto>.Conflict(
+                "Cash for this order was already confirmed.");
+
+        // A cancelled or expired order is not collectable, so taking money for
+        // it would be taking money for nothing.
+        if (order.Status is MarketplaceOrderStatus.Cancelled
+            or MarketplaceOrderStatus.Expired
+            or MarketplaceOrderStatus.Completed)
+            return MarketplaceResult<MarketplaceOrderDto>.BadRequest(
+                $"This order is {order.Status}, so it cannot be paid for.");
+
+        order.PaymentStatus = "paid";
+        order.PaidAt = DateTime.UtcNow;
+        order.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+
+        await _outbox.QueueReceiptAsync(order.OrderId, ct);
+
+        await PushOrderAsync(
+            order.UserId,
+            "order-cash-confirmed",
+            "Cash received",
+            $"Cash for order {order.OrderReference} was confirmed at the counter.",
+            $"ordercash:{order.OrderId}",
+            ct);
+
+        return MarketplaceResult<MarketplaceOrderDto>.Ok(
+            ToDto(order, order.User),
+            $"Cash confirmed for {order.OrderReference}.");
     }
 
     // ==========================================================
@@ -818,6 +1147,21 @@ public class MarketplaceOrderService
         string? idLast3,
         CancellationToken ct)
     {
+        // Claim the order's stock settle FIRST, before writing anything.
+        //
+        // This conditional UPDATE is the lock. It used to be the other way round -
+        // the order row was mutated and the inventory decremented, and only then
+        // was SaveChangesAsync called. ExecuteUpdateAsync writes immediately, so
+        // a crash in that window left the stock released but the order still
+        // open, and the retry released a second time.
+        //
+        // Losing the race is normal and expected: a buyer and a member of staff
+        // cancelling together, or a double tap. The caller then leaves the order
+        // row alone - the winner already wrote the truth.
+        if (!await _inventory.TryClaimStockSettleAsync(order.OrderId, ct)) return;
+
+        order.StockSettled = true;
+
         order.Status = MarketplaceOrderStatus.Cancelled;
         order.CancelledAt = DateTime.UtcNow;
         order.UpdatedAt = DateTime.UtcNow;
@@ -839,7 +1183,30 @@ public class MarketplaceOrderService
             MarketplaceStockAudit? audit = workspaceId == 0 ? null : new MarketplaceStockAudit(
                 workspaceId, actorUserId, operatorName, idLast3, order.OrderId, reason);
 
-            await _inventory.ReleaseAsync(productId, item.VariantId, item.Quantity, audit, ct);
+            await _inventory.ReleaseAsync(
+                productId, item.VariantId, item.Quantity, audit, ct, "Cancellation");
+        }
+
+        // A campus card order was debited at checkout, so cancelling has to give
+        // the money back - otherwise the student pays for an order that no
+        // longer exists. RefundOrderAsync is idempotent: it only credits when the
+        // order actually has a Debit on its ledger, so cancelling twice (buyer
+        // and staff racing) cannot pay out twice.
+        if (order.PaymentMethod == MarketplacePaymentMethod.CampusCard)
+        {
+            var refund = await _cards.RefundOrderAsync(order, ct);
+
+            if (refund.Success)
+            {
+                order.PaymentStatus = "unpaid";
+                await PushOrderAsync(
+                    order.UserId,
+                    "order-refunded",
+                    "Campus card refunded",
+                    $"PHP {order.TotalCentavos / 100.0:0.00} was returned to your campus card for {order.OrderReference}.",
+                    $"orderrefunded:{order.OrderId}",
+                    ct);
+            }
         }
 
         // Both the buyer and the staff path cancel through here, so the
@@ -963,6 +1330,14 @@ public class MarketplaceOrderService
 
             Notes = order.Notes,
             PaymentMethod = order.PaymentMethod,
+            PaymentMethodLabel = MarketplacePaymentMethod.Label(order.PaymentMethod),
+
+            IsPreOrder = order.IsPreOrder,
+            ScheduledFor = order.ScheduledFor,
+            ClaimCode = order.ClaimCode,
+            IsClaimed = order.ClaimedAt.HasValue,
+            ClaimedAt = order.ClaimedAt,
+            ClaimedByName = order.ClaimedByUser?.FullName ?? "",
 
             WorkspaceId = order.WorkspaceId,
             WorkspaceName = order.Workspace?.Name ?? "",

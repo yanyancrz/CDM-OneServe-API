@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using CDM_OneServe_API.Models.Marketplace;
 
 namespace CDM_OneServe_API.DTOs.Marketplace;
 
@@ -332,6 +333,23 @@ public class MarketplaceOrderDto
 
     public string Notes { get; set; } = "";
     public string PaymentMethod { get; set; } = "cash";
+    public string PaymentMethodLabel { get; set; } = "";
+
+    // ===== pre-ordering + claim (003_campus_services.sql) =====
+
+    public bool IsPreOrder { get; set; }
+
+    /// <summary>The pickup slot the buyer booked. Null on an ordinary order.</summary>
+    public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>What the buyer shows at the counter to collect this order.</summary>
+    public string? ClaimCode { get; set; }
+
+    /// <summary>True once staff have verified the code and released the order.</summary>
+    public bool IsClaimed { get; set; }
+
+    public DateTime? ClaimedAt { get; set; }
+    public string ClaimedByName { get; set; } = "";
 
     /// <summary>The stall / BusinessHub fulfilling this order.</summary>
     public int? WorkspaceId { get; set; }
@@ -400,6 +418,19 @@ public class PlaceMarketplaceOrderRequest
 
     [StringLength(16)]
     public string PaymentMethod { get; set; } = "cash";
+
+    // ===== pre-ordering (003_campus_services.sql) =====
+
+    /// <summary>
+    /// The pickup slot the buyer wants, in UTC. Non-null makes this a
+    /// pre-order; the canteen batches it instead of cooking on arrival.
+    ///
+    /// Ignored - and the order forced to Pickup - when FulfillmentMethod is
+    /// CampusDelivery, because a meal taken to a room is not a timed pickup.
+    /// The window (15 minutes to 7 days ahead) is validated by
+    /// MarketplacePreOrder.Validate, never trusted from here.
+    /// </summary>
+    public DateTime? ScheduledFor { get; set; }
 
     // ===== CampusDelivery only. Required for delivery, ignored for pickup. =====
 
@@ -910,7 +941,14 @@ public class MarketplaceInventoryTransactionDto
     public string VariantName { get; set; } = "";
     public int WorkspaceId { get; set; }
     public string WorkspaceName { get; set; } = "";
-    public int ActorUserId { get; set; }
+
+    /// <summary>
+    /// Null for a movement a background schedule caused - a system-initiated
+    /// stock release has no human to attribute it to. See
+    /// 011_system_audit_actor.sql.
+    /// </summary>
+    public int? ActorUserId { get; set; }
+
     public string ActorName { get; set; } = "";
     public string OperatorName { get; set; } = "";
     public string IdLast3 { get; set; } = "";
@@ -922,4 +960,768 @@ public class MarketplaceInventoryTransactionDto
     public int? OrderId { get; set; }
     public string OrderReference { get; set; } = "";
     public DateTime CreatedAt { get; set; }
+}
+// ============================================================
+// CAMPUS SERVICES DTOs
+//
+// Added by Database/Marketplace/003_campus_services.sql. Same conventions as
+// the DTOs above: *Dto for reads, *Request for commands, money always integer
+// *_Centavos, and nothing here carries a password or writes to the shared user.
+//
+// Sections: campus card -> ID claim -> pre-order checkout + claim verification
+// ============================================================
+
+// ------------------------------------------------------------
+// CAMPUS CARD (digital payment + balance)
+// ------------------------------------------------------------
+
+/// <summary>
+/// The buyer's campus card. Issued lazily on first read, so a student who never
+/// touches the card never gets a row.
+/// </summary>
+public class CampusCardDto
+{
+    public int CardId { get; set; }
+    public int UserId { get; set; }
+
+    /// <summary>Owner name from OneServe - the card has no name of its own.</summary>
+    public string FullName { get; set; } = "";
+    public string IdNumber { get; set; } = "";
+    /// <summary>Student | Faculty, read from OneServe.</summary>
+    public string AccountType { get; set; } = "";
+
+    public string CardNumber { get; set; } = "";
+    public int BalanceCentavos { get; set; }
+
+    /// <summary>Active | Blocked.</summary>
+    public string Status { get; set; } = "";
+
+    /// <summary>True when this card can pay right now.</summary>
+    public bool CanPay => Status == CampusCardStatus.Active;
+
+    public DateTime IssuedAt { get; set; }
+    public DateTime? LastLoadedAt { get; set; }
+
+    /// <summary>The most recent ledger movements, newest first.</summary>
+    public List<CampusCardTransactionDto> RecentTransactions { get; set; } = new();
+}
+
+public class CampusCardTransactionDto
+{
+    public long TransactionId { get; set; }
+
+    /// <summary>Credit | Debit | Refund.</summary>
+    public string Type { get; set; } = "";
+    public string TypeLabel { get; set; } = "";
+
+    /// <summary>Always positive; the sign comes from Type.</summary>
+    public int AmountCentavos { get; set; }
+
+    /// <summary>
+    /// The same amount, signed for display: negative for Debit, positive for
+    /// Credit and Refund. Saves the frontend from re-deriving the direction.
+    /// </summary>
+    public int SignedAmountCentavos { get; set; }
+
+    public int BalanceAfterCentavos { get; set; }
+
+    public int? ReferenceOrderId { get; set; }
+    public string OrderReference { get; set; } = "";
+
+    public string PerformedByName { get; set; } = "";
+    public string OperatorName { get; set; } = "";
+    public string Notes { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+}
+
+public class LoadCardRequest
+{
+    /// <summary>How much to add. Integer centavos - never a peso float.</summary>
+    [Range(1, 500_000)]
+    public int AmountCentavos { get; set; }
+
+    [StringLength(300)]
+    public string? Notes { get; set; }
+}
+
+/// <summary>Set a card's Active/Blocked state. Blocking keeps the balance.</summary>
+public class SetCardStatusRequest
+{
+    /// <summary>Active | Blocked.</summary>
+    [Required]
+    [StringLength(16)]
+    public string Status { get; set; } = CampusCardStatus.Active;
+}
+
+// ------------------------------------------------------------
+// STUDENT / FACULTY ID CLAIM
+// ------------------------------------------------------------
+
+public class IdClaimDto
+{
+    public int IdClaimId { get; set; }
+    public int UserId { get; set; }
+    public string FullName { get; set; } = "";
+    public string IdNumber { get; set; } = "";
+    public string AccountType { get; set; } = "";
+    public string Email { get; set; } = "";
+
+    /// <summary>FirstIssue | Replacement | Lost | Damaged.</summary>
+    public string ClaimType { get; set; } = "";
+    public string ClaimTypeLabel { get; set; } = "";
+
+    public string Reason { get; set; } = "";
+
+    /// <summary>Pending | ReadyForClaim | Claimed | Rejected.</summary>
+    public string Status { get; set; } = "";
+
+    public string? ClaimCode { get; set; }
+    public string? ReviewNotes { get; set; }
+    public string ReviewedByName { get; set; } = "";
+
+    public DateTime? ReviewedAt { get; set; }
+    public DateTime? ClaimedAt { get; set; }
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// The status staff may set next by approving, or null when the claim is
+    /// finished. Computed server-side so the staff UI never offers an illegal
+    /// move.
+    /// </summary>
+    public string? NextStatus { get; set; }
+
+    /// <summary>
+    /// True only while a Pending claim can still be turned down. Once it is
+    /// released the answer is to hand the ID over, not to reject it.
+    /// </summary>
+    public bool CanReject { get; set; }
+
+    /// <summary>True when the next approve releases it for collection (not hands it over).</summary>
+    public bool IsAwaitingRelease { get; set; }
+}
+
+public class RequestIdClaimRequest
+{
+    /// <summary>FirstIssue | Replacement | Lost | Damaged.</summary>
+    [Required]
+    [StringLength(16)]
+    public string ClaimType { get; set; } = IdClaimType.Replacement;
+
+    /// <summary>Required by the service when ClaimType is Lost or Damaged.</summary>
+    [StringLength(500)]
+    public string? Reason { get; set; }
+}
+
+/// <summary>Staff decision on a claim. Approve releases it for collection.</summary>
+public class ReviewIdClaimRequest
+{
+    /// <summary>
+    /// Approve a Pending claim for collection, or reject it. On a claim that is
+    /// already ReadyForClaim, approving marks it collected - so the staff screen
+    /// needs only one toggle.
+    /// </summary>
+    public bool Approve { get; set; }
+
+    [StringLength(500)]
+    public string? Notes { get; set; }
+}
+
+// ------------------------------------------------------------
+// PRE-ORDER CHECKOUT + CLAIM VERIFICATION
+// ------------------------------------------------------------
+
+/// <summary>
+/// What the canteen/paper shop needs to offer pre-ordering, so the buyer screen
+/// does not have to hardcode which day of the week it is.
+/// </summary>
+public class PreOrderOptionsDto
+{
+    public bool Enabled { get; set; }
+
+    /// <summary>The soonest slot that can be booked, UTC.</summary>
+    public DateTime EarliestSlotUtc { get; set; }
+
+    /// <summary>The furthest slot that can be booked, UTC.</summary>
+    public DateTime LatestSlotUtc { get; set; }
+
+    /// <summary>Step between bookable slots, in minutes.</summary>
+    public int SlotStepMinutes { get; set; }
+}
+
+/// <summary>
+/// The counter lookup. Staff type the code the buyer shows and get back the
+/// order to release - never the whole order table to sift through.
+/// </summary>
+public class ClaimLookupDto
+{
+    /// <summary>True when the code matched something collectable right now.</summary>
+    public bool Found { get; set; }
+
+    /// <summary>Why it did not match, phrased for the person at the counter.</summary>
+    public string Message { get; set; } = "";
+
+    /// <summary>The order, when Found.</summary>
+    public MarketplaceOrderDto? Order { get; set; }
+}
+
+/// <summary>Releases a claimed order at the counter.</summary>
+public class VerifyClaimRequest
+{
+    /// <summary>The claim code the buyer showed.</summary>
+    [Required]
+    [StringLength(8)]
+    public string ClaimCode { get; set; } = "";
+
+    [StringLength(300)]
+    public string? Notes { get; set; }
+}
+
+// ============================================================
+// STOREFRONT DTOs
+//
+// Created by Database/Marketplace/006_storefronts.sql. *Dto for reads,
+// *Request for commands. Money stays integer *_Centavos.
+// ============================================================
+
+/// <summary>A storefront as a buyer sees it in the browse list.</summary>
+public class MarketplaceStoreDto
+{
+    public int StoreId { get; set; }
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string Kind { get; set; } = "";
+    public string KindLabel { get; set; } = "";
+    public string Location { get; set; } = "";
+    public string? PhotoUrl { get; set; }
+    public string? BannerUrl { get; set; }
+
+    /// <summary>active | paused | banned | deleted.</summary>
+    public string Status { get; set; } = "";
+
+    /// <summary>True when a buyer may place an order here right now.</summary>
+    public bool IsOrderable { get; set; } = true;
+
+    public bool DeliveryEnabled { get; set; }
+    public int DeliveryFeeCentavos { get; set; }
+
+    /// <summary>The fulfilment workspace behind the storefront.</summary>
+    public int? WorkspaceId { get; set; }
+
+    /// <summary>That workspace's name, for the Head's management screen.</summary>
+    public string WorkspaceName { get; set; } = "";
+
+    // ===== owner, for the management screens =====
+
+    public int? OwnerUserId { get; set; }
+    public string OwnerName { get; set; } = "";
+    public string OwnerEmail { get; set; } = "";
+
+    /// <summary>True when the caller owns this store.</summary>
+    public bool IsOwner { get; set; }
+
+    /// <summary>
+    /// True when the caller is a team member with every permission - i.e. they
+    /// can use the store workspace as if they owned it.
+    /// </summary>
+    public bool CanManage { get; set; }
+
+    /// <summary>The caller's granted permissions. Empty for a buyer.</summary>
+    public List<string> MyPermissions { get; set; } = new();
+
+    // ===== public counters =====
+
+    public int ProductCount { get; set; }
+
+    /// <summary>
+    /// Units sold from completed, paid orders - the "popular" sort key, matching
+    /// the CampusMarket rule that unpaid or cancelled sales never count.
+    /// </summary>
+    public int SoldUnits { get; set; }
+
+    /// <summary>Sales in centavos from completed, paid orders.</summary>
+    public int SalesCentavos { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+}
+
+/// <summary>
+/// Sales figures for one storefront, for the owner or a member holding the
+/// "analytics" permission. Created by Database/Marketplace/018_store_analytics.sql.
+///
+/// Read-only and derived - never stored. The daily series comes from the
+/// marketplace_sales_daily view, which counts completed AND paid orders only.
+/// </summary>
+public class MarketplaceStoreAnalyticsDto
+{
+    public int StoreId { get; set; }
+
+    /// <summary>Paid sales across the whole 28-day window, in centavos.</summary>
+    public long Sales28dCentavos { get; set; }
+
+    /// <summary>Orders contributing to Sales28dCentavos.</summary>
+    public int Orders28d { get; set; }
+
+    /// <summary>Units sold across the whole 28-day window.</summary>
+    public int Units28d { get; set; }
+
+    /// <summary>
+    /// Average daily sales over the previous seven COMPLETE Manila days, in
+    /// centavos. Days with no sale count as zero.
+    /// </summary>
+    public long DailyAverageCentavos { get; set; }
+
+    /// <summary>
+    /// Plain estimate for the next seven days: the sum of the previous seven
+    /// complete days. An average, explicitly not a model.
+    /// </summary>
+    public long Forecast7dCentavos { get; set; }
+
+    /// <summary>How many of the previous seven complete days had any paid sale.</summary>
+    public int DaysWithSales { get; set; }
+
+    /// <summary>
+    /// One row per Manila calendar day for the last 28 days, oldest first, with
+    /// quiet days present as zero so the chart has no gaps.
+    /// </summary>
+    public List<MarketplaceSalesBucketDto> SalesDaily { get; set; } = new();
+}
+
+/// <summary>
+/// One team member, with their permissions.
+///
+/// The owner is included here as a synthetic row (ownerUserId set, isOwner
+/// true) so the team screen shows them instead of a confusing gap.
+/// </summary>
+public class MarketplaceStoreMemberDto
+{
+    public int StoreId { get; set; }
+    public int UserId { get; set; }
+    public string FullName { get; set; } = "";
+    public string IdNumber { get; set; } = "";
+    public string Email { get; set; } = "";
+
+    /// <summary>Free text chosen by the owner.</summary>
+    public string Position { get; set; } = "";
+
+    public bool IsOwner { get; set; }
+    public bool IsActive { get; set; } = true;
+
+    /// <summary>The five permission names currently granted.</summary>
+    public List<string> Permissions { get; set; } = new();
+
+    public DateTime AssignedAt { get; set; }
+}
+
+/// <summary>A request to join a store's team.</summary>
+public class MarketplaceStoreApplicationDto
+{
+    public int ApplicationId { get; set; }
+    public int StoreId { get; set; }
+    public string StoreName { get; set; } = "";
+    public int UserId { get; set; }
+    public string FullName { get; set; } = "";
+    public string IdNumber { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Position { get; set; } = "";
+    public string Message { get; set; } = "";
+
+    /// <summary>pending | approved | rejected.</summary>
+    public string Status { get; set; } = "";
+
+    public string? ReviewNote { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+}
+
+/// <summary>Create or edit a storefront. Used by the Marketplace Head.</summary>
+public class SaveMarketplaceStoreRequest
+{
+    /// <summary>Null creates; set edits.</summary>
+    public int? StoreId { get; set; }
+
+    [Required]
+    [StringLength(100)]
+    public string Name { get; set; } = "";
+
+    [StringLength(3000)]
+    public string? Description { get; set; }
+
+    /// <summary>food | supplies.</summary>
+    [StringLength(16)]
+    public string Kind { get; set; } = MarketplaceStoreKind.Food;
+
+    [StringLength(200)]
+    public string? Location { get; set; }
+
+    [StringLength(255)]
+    public string? PhotoUrl { get; set; }
+
+    [StringLength(255)]
+    public string? BannerUrl { get; set; }
+
+    /// <summary>Which owner account fronts this store. Head-only.</summary>
+    public int? OwnerUserId { get; set; }
+
+    /// <summary>The fulfilment workspace to bridge to. Head-only.</summary>
+    public int? WorkspaceId { get; set; }
+
+    public bool DeliveryEnabled { get; set; }
+
+    [Range(0, 100_000)]
+    public int DeliveryFeeCentavos { get; set; }
+
+    /// <summary>active | paused. Banned and deleted are not settable here.</summary>
+    [StringLength(16)]
+    public string Status { get; set; } = MarketplaceStoreStatus.Active;
+}
+
+/// <summary>Add or edit a team member, or remove them when IsActive is false.</summary>
+public class SaveStoreMemberRequest
+{
+    public int UserId { get; set; }
+
+    [StringLength(120)]
+    public string? Position { get; set; }
+
+    /// <summary>
+    /// Any subset of catalog/orders/cash/analytics/delivery. Unknown values are
+    /// dropped; an empty list falls back to the default so a member is never
+    /// created with no permissions and no idea why.
+    /// </summary>
+    public List<string>? Permissions { get; set; }
+
+    /// <summary>False deactivates the member instead of updating them.</summary>
+    public bool IsActive { get; set; } = true;
+}
+
+/// <summary>The owner's decision on a job application.</summary>
+public class ReviewStoreApplicationRequest
+{
+    public bool Approve { get; set; }
+
+    /// <summary>
+    /// The position actually granted. Required when approving, because the
+    /// applicant asked for one thing and the owner may decide otherwise.
+    /// </summary>
+    [StringLength(120)]
+    public string? Position { get; set; }
+
+    [StringLength(500)]
+    public string? Notes { get; set; }
+
+    /// <summary>Permissions to grant on approval. Empty falls back to the default.</summary>
+    public List<string>? Permissions { get; set; }
+}
+
+/// <summary>Apply to join a store's team.</summary>
+public class ApplyToStoreRequest
+{
+    public int StoreId { get; set; }
+
+    [Required]
+    [StringLength(120)]
+    public string Position { get; set; } = "";
+
+    [StringLength(1000)]
+    public string? Message { get; set; }
+}
+
+/// <summary>A verified Student or Faculty account applies to become a seller.</summary>
+public class ApplyToSellRequest
+{
+    [Required]
+    [StringLength(100)]
+    public string BusinessName { get; set; } = "";
+
+    [StringLength(3000)]
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// Optional private document path. Uploaded to the identity-docs bucket,
+    /// the same way the physical ID is uploaded, and must start with the
+    /// applicant's own user id.
+    /// </summary>
+    [StringLength(500)]
+    public string? DocumentPath { get; set; }
+}
+
+/// <summary>The Head's decision on a seller application.</summary>
+public class ReviewSellerApplicationRequest
+{
+    public bool Approve { get; set; }
+
+    [StringLength(500)]
+    public string? Note { get; set; }
+}
+
+/// <summary>A seller application as the Head sees it.</summary>
+public class MarketplaceSellerApplicationDto
+{
+    public int ApplicationId { get; set; }
+    public int UserId { get; set; }
+    public string FullName { get; set; } = "";
+    public string Email { get; set; } = "";
+
+    public string BusinessName { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string? DocumentPath { get; set; }
+
+    /// <summary>pending | approved | rejected.</summary>
+    public string Status { get; set; } = "";
+
+    public string? ReviewNote { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+}
+
+/// <summary>A storefront category. StoreId null means system-wide.</summary>
+public class MarketplaceCategoryDto
+{
+    public int CategoryId { get; set; }
+
+    /// <summary>Null = a system category, valid for any store.</summary>
+    public int? StoreId { get; set; }
+
+    public string Name { get; set; } = "";
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int ProductCount { get; set; }
+}
+
+/// <summary>Create or rename a storefront category.</summary>
+public class SaveStoreCategoryRequest
+{
+    public int? CategoryId { get; set; }
+
+    [Required]
+    [StringLength(80)]
+    public string Name { get; set; } = "";
+
+    public int SortOrder { get; set; }
+}
+
+/// <summary>
+/// One gallery image for a product.
+///
+/// Max eight per product and HTTPS-only, matching the CampusMarket rules. The
+/// existing products.ImageUrl remains the primary image.
+/// </summary>
+public class ProductPhotoDto
+{
+    public int PhotoId { get; set; }
+    public int ProductId { get; set; }
+    public string Url { get; set; } = "";
+    public int SortOrder { get; set; }
+}
+
+public class SaveProductPhotoRequest
+{
+    [Required]
+    [StringLength(2048)]
+    public string Url { get; set; } = "";
+
+    public int SortOrder { get; set; }
+}
+
+/// <summary>A buyer's review of a storefront.</summary>
+public class MarketplaceReviewDto
+{
+    public int ReviewId { get; set; }
+
+    /// <summary>The order this review is about. Null once it is deleted.</summary>
+    public int? OrderId { get; set; }
+
+    public int? UserId { get; set; }
+
+    public int StoreId { get; set; }
+
+    /// <summary>1-5.</summary>
+    public int Rating { get; set; }
+
+    public string Body { get; set; } = "";
+
+    public List<ReviewPhotoDto> Photos { get; set; } = new();
+
+    public DateTime CreatedAt { get; set; }
+}
+
+public class ReviewPhotoDto
+{
+    public int PhotoId { get; set; }
+    public int ReviewId { get; set; }
+    public string Url { get; set; } = "";
+    public int SortOrder { get; set; }
+}
+
+/// <summary>Rating summary for a store. Null rating means no reviews yet.</summary>
+public class MarketplaceStoreRatingDto
+{
+    public int StoreId { get; set; }
+
+    /// <summary>Average rating rounded to one decimal, or null when there are none.</summary>
+    public double? Rating { get; set; }
+
+    public int ReviewCount { get; set; }
+}
+
+public class ReviewOrderRequest
+{
+    public int OrderId { get; set; }
+
+    [Range(1, 5)]
+    public int Rating { get; set; }
+
+    [StringLength(2000)]
+    public string? Body { get; set; }
+
+    /// <summary>HTTPS URLs, at most 5. Unknown or non-HTTPS entries are dropped.</summary>
+    public List<string>? Photos { get; set; }
+}
+
+/// <summary>A buyer's request to return a paid order.</summary>
+public class RequestReturnRequest
+{
+    public int OrderId { get; set; }
+
+    [Required]
+    [StringLength(2000)]
+    public string Reason { get; set; } = "";
+
+    /// <summary>When approved and confirmed, the stock goes back on the shelf.</summary>
+    public bool Restock { get; set; } = true;
+}
+
+/// <summary>The owner's or administrator's decision on a refund request.</summary>
+public class ReviewRefundRequest
+{
+    public bool Approve { get; set; }
+
+    [StringLength(500)]
+    public string? Note { get; set; }
+}
+
+/// <summary>A refund request as it appears in the queue.</summary>
+public class MarketplaceRefundRequestDto
+{
+    public int OrderId { get; set; }
+
+    public string Reason { get; set; } = "";
+
+    /// <summary>pending | approved | rejected | processing | completed.</summary>
+    public string Status { get; set; } = "";
+
+    public bool Restock { get; set; }
+
+    public string? ReviewNote { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+}
+
+// ============================================================
+// MODERATION DTOs
+// ============================================================
+
+public class MarketplaceBlockDto
+{
+    public int BlockId { get; set; }
+    public int UserId { get; set; }
+    public int? TargetUserId { get; set; }
+    public int? TargetStoreId { get; set; }
+    public string TargetName { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+}
+
+public class MarketplaceReportDto
+{
+    public int ReportId { get; set; }
+    public int ReporterId { get; set; }
+    public string ReporterName { get; set; } = "";
+    public int? TargetUserId { get; set; }
+    public string TargetUserName { get; set; } = "";
+    public int? TargetStoreId { get; set; }
+    public string TargetStoreName { get; set; } = "";
+    public string Reason { get; set; } = "";
+
+    /// <summary>open | reviewed | dismissed.</summary>
+    public string Status { get; set; } = "";
+
+    public string? Resolution { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+}
+
+public class MarketplaceSupportTicketDto
+{
+    public int TicketId { get; set; }
+    public int UserId { get; set; }
+    public string FullName { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Subject { get; set; } = "";
+    public string Body { get; set; } = "";
+
+    /// <summary>open | answered | closed.</summary>
+    public string Status { get; set; } = "";
+
+    public string? Response { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? RespondedAt { get; set; }
+    public DateTime? ClosedAt { get; set; }
+}
+
+public class BlockRequest
+{
+    /// <summary>Block a user. Mutually exclusive with TargetStoreId.</summary>
+    public int? TargetUserId { get; set; }
+
+    /// <summary>Block a store. Mutually exclusive with TargetUserId.</summary>
+    public int? TargetStoreId { get; set; }
+}
+
+public class ReportRequest
+{
+    public int? TargetUserId { get; set; }
+    public int? TargetStoreId { get; set; }
+
+    [Required]
+    [StringLength(2000, MinimumLength = 5)]
+    public string Reason { get; set; } = "";
+}
+
+public class ResolveReportRequest
+{
+    /// <summary>reviewed or dismissed.</summary>
+    [Required]
+    [StringLength(16)]
+    public string Status { get; set; } = "";
+
+    [StringLength(2000)]
+    public string? Resolution { get; set; }
+}
+
+public class OpenTicketRequest
+{
+    [Required]
+    [StringLength(150, MinimumLength = 3)]
+    public string Subject { get; set; } = "";
+
+    [Required]
+    [StringLength(3000, MinimumLength = 5)]
+    public string Body { get; set; } = "";
+}
+
+public class RespondTicketRequest
+{
+    [Required]
+    [StringLength(3000, MinimumLength = 1)]
+    public string Response { get; set; } = "";
+}
+
+public class SetBanRequest
+{
+    public bool Banned { get; set; }
+
+    [StringLength(500)]
+    public string? Reason { get; set; }
 }

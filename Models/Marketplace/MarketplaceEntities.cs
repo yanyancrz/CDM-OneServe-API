@@ -110,6 +110,17 @@ public class MarketplaceProduct
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
 
+    // ===== storefront categories (006_storefronts.sql) =====
+    // Optional. The existing Category/SubCategory strings stay authoritative for
+    // the 16 products that predate storefronts; CategoryId is for products a
+    // store owner files under their own storefront category. Null until then.
+    //
+    // The navigation is StoreCategory, not Category: `Category` is already the
+    // legacy string column (Food | Supplies | Uniforms | Merchandise).
+    public int? CategoryId { get; set; }
+
+    public MarketplaceCategory? StoreCategory { get; set; }
+
     /// <summary>Food | Uniforms | Merchandise.</summary>
     public string Category { get; set; } = "";
 
@@ -276,8 +287,31 @@ public class MarketplaceOrder
     /// <summary>Buyer note on the order; applies to both methods.</summary>
     public string Notes { get; set; } = "";
 
-    /// <summary>cash for now; the column exists so online can be added later.</summary>
+    /// <summary>cash | campus_card. The column exists so online can be added later.</summary>
     public string PaymentMethod { get; set; } = "cash";
+
+    // ===== pre-ordering (003_campus_services.sql) =====
+
+    /// <summary>
+    /// True when the buyer chose a pickup slot ahead of time (canteen
+    /// pre-order). False for an ordinary "as soon as you can" order, which is
+    /// every row that existed before pre-ordering shipped.
+    /// </summary>
+    public bool IsPreOrder { get; set; }
+
+    /// <summary>
+    /// The pickup slot the buyer asked for. Null on an ordinary order.
+    /// Stored UTC, like every other timestamp in this module.
+    /// </summary>
+    public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>
+    /// The short code the buyer shows at the counter to collect the order.
+    /// Issued for pre-orders and for orders paid at the counter; null when
+    /// the order is already settled. Unique - the UNIQUE index ignores the
+    /// many nulls.
+    /// </summary>
+    public string? ClaimCode { get; set; }
 
     // ===== money, always integer centavos =====
 
@@ -297,10 +331,61 @@ public class MarketplaceOrder
     /// <summary>unpaid | paid.</summary>
     public string PaymentStatus { get; set; } = "unpaid";
 
+    // ===== order lifecycle (010_order_lifecycle.sql) =====
+
+    /// <summary>
+    /// True once this order no longer holds an outstanding reservation -
+    /// whether it was RELEASED (cancelled, expired) or CONSUMED (completed).
+    ///
+    /// This is the IDEMPOTENCY LOCK for stock. Every settle path claims it with
+    /// a conditional UPDATE
+    /// (<c>WHERE OrderId = @id AND StockSettled = 0</c>) and only touches
+    /// inventory when that update affects exactly one row, so two concurrent
+    /// callers cannot both release the same hold.
+    ///
+    /// Without it, the only guard was "does this SKU have a hold of at least this
+    /// much", which a second cancel satisfies using a DIFFERENT order's
+    /// reservation - silently starving a live order.
+    ///
+    /// Named Settled rather than Released because a completed order consumes its
+    /// hold rather than returning it.
+    /// </summary>
+    public bool StockSettled { get; set; }
+
+    /// <summary>When cash was actually confirmed, if it was.</summary>
+    public DateTime? PaidAt { get; set; }
+
+    /// <summary>
+    /// The collect-by deadline, or null when there is none yet.
+    ///
+    /// Deliberately NOT set at placement. In the CampusMarket original a 10-minute
+    /// expiry works because <c>awaiting_payment</c> means an unfinished ONLINE
+    /// payment. Here a cash order is unpaid from placement until it is collected
+    /// at the counter, which is hours - so a short window would cancel almost
+    /// every cash order before the kitchen started it.
+    ///
+    /// The deadline is set when the order becomes collectable (ReadyForPickup or
+    /// Delivered), which is the moment it can actually be abandoned.
+    /// </summary>
+    public DateTime? ExpiresAt { get; set; }
+
+    /// <summary>Why it expired, for the audit. e.g. "Not collected within 24 hours".</summary>
+    public string? ExpiryReason { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public DateTime? CancelledAt { get; set; }
+
+    // ===== claim hand-over (003_campus_services.sql) =====
+
+    /// <summary>When staff verified the claim code and released the order.</summary>
+    public DateTime? ClaimedAt { get; set; }
+
+    /// <summary>The staff member who released it. Null once the user is deleted.</summary>
+    public int? ClaimedByUserId { get; set; }
+
+    public User? ClaimedByUser { get; set; }
 
     public List<MarketplaceOrderItem> Items { get; set; } = new();
 }
@@ -489,8 +574,15 @@ public class MarketplaceInventoryTransaction
     public int WorkspaceId { get; set; }
     public MarketplaceWorkspace? Workspace { get; set; }
 
-    /// <summary>The signed-in account that caused this (stall account, head, buyer...).</summary>
-    public int ActorUserId { get; set; }
+    /// <summary>
+    /// The signed-in account that caused this (stall account, head, buyer...).
+    ///
+    /// Null when that user is deleted, and null for movements a background
+    /// schedule caused - a system-initiated stock release has no human to
+    /// attribute it to, and the audit should record that rather than inventing a
+    /// user id. See 011_system_audit_actor.sql.
+    /// </summary>
+    public int? ActorUserId { get; set; }
 
     /// <summary>
     /// The human on duty, from the validated operator session. Null for

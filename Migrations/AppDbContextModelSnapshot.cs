@@ -42,7 +42,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("admin_activity_logs");
+                    b.ToTable("admin_activity_logs", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.AdminNotificationPreference", b =>
@@ -67,7 +67,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("admin_notification_preferences");
+                    b.ToTable("admin_notification_preferences", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Announcement", b =>
@@ -108,7 +108,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Announcements");
+                    b.ToTable("Announcements", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.EmailChangeRequest", b =>
@@ -135,7 +135,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("EmailChangeRequests");
+                    b.ToTable("EmailChangeRequests", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceAppointment", b =>
@@ -607,7 +607,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("BookId");
 
-                    b.ToTable("Books");
+                    b.ToTable("Books", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.BorrowTransaction", b =>
@@ -664,7 +664,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("borrowtransactions");
+                    b.ToTable("borrowtransactions", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibraryActivity", b =>
@@ -701,7 +701,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("LibraryActivities");
+                    b.ToTable("LibraryActivities", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibraryAttendance", b =>
@@ -777,7 +777,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("NotificationId");
 
-                    b.ToTable("LibraryNotifications");
+                    b.ToTable("LibraryNotifications", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibrarySettings", b =>
@@ -811,7 +811,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("SettingId");
 
-                    b.ToTable("librarysettings");
+                    b.ToTable("librarysettings", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibraryTerm", b =>
@@ -847,7 +847,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("TermId");
 
-                    b.ToTable("libraryterms");
+                    b.ToTable("libraryterms", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.Reservation", b =>
@@ -886,7 +886,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("reservations");
+                    b.ToTable("reservations", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundClaim", b =>
@@ -1162,7 +1162,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("OTPVerifications");
+                    b.ToTable("OTPVerifications", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.User", b =>
@@ -1245,7 +1245,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.UserActivity", b =>
@@ -1295,7 +1295,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("PasswordResetOTPs");
+                    b.ToTable("PasswordResetOTPs", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceAppointment", b =>

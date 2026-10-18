@@ -117,6 +117,32 @@ public class AuthController : ControllerBase
             .ToUpperInvariant();
     }
 
+    // =========================================================
+    // PNM SCHOOL EMAIL DOMAINS
+    // A school email already proves the person belongs to the
+    // school, so registration with one skips the physical ID
+    // upload and activates the account right after OTP.
+    // Returns the account type the domain belongs to, or null
+    // when the email is not a school email.
+    // =========================================================
+
+    public const string StudentEmailDomain = "@student.pnm.edu.ph";
+
+    public const string FacultyEmailDomain = "@pnm.edu.ph";
+
+    public static string? GetSchoolRoleForEmail(string? email)
+    {
+        var normalized = (email ?? "").Trim().ToLowerInvariant();
+
+        if (normalized.EndsWith(StudentEmailDomain))
+            return "Student";
+
+        if (normalized.EndsWith(FacultyEmailDomain))
+            return "Faculty";
+
+        return null;
+    }
+
     private int? GetCurrentUserId()
     {
         var value = User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -142,33 +168,12 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Register(
         RegisterRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.FirstName))
-            return BadRequest(new { message = "First Name is required." });
-
-        if (string.IsNullOrWhiteSpace(request.LastName))
-            return BadRequest(new { message = "Last Name is required." });
-
         if (string.IsNullOrWhiteSpace(request.IdNumber))
             return BadRequest(new { message = "ID Number is required." });
 
         if (string.IsNullOrWhiteSpace(request.Email))
             return BadRequest(new { message = "Email is required." });
 
-        if (string.IsNullOrWhiteSpace(request.Password))
-            return BadRequest(new { message = "Password is required." });
-
-        if (string.IsNullOrWhiteSpace(request.PhysicalIdDocument))
-            return BadRequest(new
-            {
-                message = "Physical ID supporting document is required."
-            });
-
-        var submittedFullName = BuildFullName(
-            request.FirstName,
-            request.MiddleName,
-            request.LastName);
-
-        var normalizedId = NormalizeIdNumber(request.IdNumber);
         var normalizedEmail = request.Email.Trim();
         var role = request.Role?.Trim();
 
@@ -177,6 +182,41 @@ public class AuthController : ControllerBase
             return BadRequest(new
             {
                 message = "Please select a valid account type."
+            });
+        }
+
+        // =====================================================
+        // NEW FLOW: ID Number + Email only (no physical ID,
+        // no names, no password from the user).
+        // The ID must exist in the official School Records —
+        // IDs live ONLY in the database, never in code.
+        // =====================================================
+
+        var normalizedId = NormalizeIdNumber(request.IdNumber);
+
+        var schoolRecords = await _context.SchoolRecords
+            .AsNoTracking()
+            .ToListAsync();
+
+        var schoolRecord = schoolRecords.FirstOrDefault(x =>
+            NormalizeIdNumber(x.IdNumber) == normalizedId);
+
+        if (schoolRecord == null)
+        {
+            return BadRequest(new
+            {
+                message = "This ID Number is not in the official school records. Please contact the administrator."
+            });
+        }
+
+        if (!string.Equals(
+                schoolRecord.Role?.Trim(),
+                role,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new
+            {
+                message = $"This ID Number is registered as a {schoolRecord.Role} record. Please select {schoolRecord.Role} as your account type."
             });
         }
 
@@ -218,22 +258,7 @@ public class AuthController : ControllerBase
             });
         }
 
-        var otpRecords = await _context.OTPVerifications
-            .AsNoTracking()
-            .ToListAsync();
-
-        var existingPendingRegistration = otpRecords.FirstOrDefault(x =>
-            NormalizeIdNumber(x.IdNumber) == normalizedId);
-
-        if (existingPendingRegistration != null)
-        {
-            return BadRequest(new
-            {
-                message =
-                    "This ID Number already has a pending registration. Please complete the OTP verification."
-            });
-        }
-
+        // Stale OTP rows from the old flow must not block the new one.
         var existingOtp = await _context.OTPVerifications
             .FirstOrDefaultAsync(x => x.Email == normalizedEmail);
 
@@ -243,47 +268,111 @@ public class AuthController : ControllerBase
             await _context.SaveChangesAsync();
         }
 
-        var otpCode = Random.Shared
-            .Next(100000, 999999)
-            .ToString();
+        // =====================================================
+        // CREATE THE ACCOUNT IMMEDIATELY.
+        // The School Record IS the verification, so the account
+        // is Active at once — no OTP, no admin review.
+        // Names are completed later in Setup Profile.
+        // =====================================================
 
-        var otpRecord = new OTPVerification
+        var generatedPassword = GenerateCredentialsPassword();
+
+        var user = new User
         {
             IdNumber = request.IdNumber.Trim(),
-            FullName = submittedFullName,
+            FullName = "",
             Email = normalizedEmail,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-            PhysicalIdDocument = request.PhysicalIdDocument,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(generatedPassword),
             Role = role,
-            OTPCode = otpCode,
-            ExpiryDate = DateTime.Now.AddMinutes(5)
+            IsVerified = true,
+            IsProfileComplete = false,
+            PhysicalIdDocument = null,
+            PhysicalIdVerificationStatus = "Verified",
+            PhysicalIdVerifiedAt = DateTime.Now,
+            PhysicalIdReviewedBy = null,
+            AccountStatus = "Active"
         };
 
-        _context.OTPVerifications.Add(otpRecord);
+        _context.Users.Add(user);
+
+        var trackedRecord = await _context.SchoolRecords
+            .FirstOrDefaultAsync(x => x.Id == schoolRecord.Id);
+
+        if (trackedRecord != null)
+        {
+            trackedRecord.IsUsed = true;
+        }
+
         await _context.SaveChangesAsync();
 
         try
         {
-            await _emailService.SendOtpAsync(normalizedEmail, otpCode);
+            await _emailService.SendCredentialsAsync(
+                normalizedEmail,
+                user.IdNumber,
+                generatedPassword);
         }
         catch (Exception ex)
         {
-            _context.OTPVerifications.Remove(otpRecord);
+            _context.Users.Remove(user);
+
+            if (trackedRecord != null)
+            {
+                trackedRecord.IsUsed = false;
+            }
+
             await _context.SaveChangesAsync();
 
             return StatusCode(500, new
             {
-                message = "Unable to send OTP email.",
+                message = "Unable to send login credentials email.",
                 error = ex.Message
             });
         }
 
         return Ok(new
         {
-            message = "OTP Sent",
+            message = "Registered! Your login credentials were sent to your email.",
             recordType = role,
-            fullName = submittedFullName
+            idNumber = user.IdNumber
         });
+    }
+
+    // =========================================================
+    // GENERATED CREDENTIALS PASSWORD
+    // Always satisfies the app's strong-password rules:
+    // 12 chars, upper + lower + digit + symbol, no spaces.
+    // =========================================================
+
+    private static string GenerateCredentialsPassword()
+    {
+        const string upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+        const string lower = "abcdefghijkmnpqrstuvwxyz";
+        const string digits = "23456789";
+        const string symbols = "!@#$%&*?";
+        const string all = upper + lower + digits + symbols;
+
+        var chars = new[]
+        {
+            upper[Random.Shared.Next(upper.Length)],
+            lower[Random.Shared.Next(lower.Length)],
+            digits[Random.Shared.Next(digits.Length)],
+            symbols[Random.Shared.Next(symbols.Length)]
+        }.ToList();
+
+        for (var i = chars.Count; i < 12; i++)
+        {
+            chars.Add(all[Random.Shared.Next(all.Length)]);
+        }
+
+        // Fisher-Yates shuffle so the pattern is not guessable.
+        for (var i = chars.Count - 1; i > 0; i--)
+        {
+            var j = Random.Shared.Next(i + 1);
+            (chars[i], chars[j]) = (chars[j], chars[i]);
+        }
+
+        return new string(chars.ToArray());
     }
 
     // =========================================================
@@ -345,6 +434,11 @@ public class AuthController : ControllerBase
                 "Deleted",
                 StringComparison.OrdinalIgnoreCase))
         {
+            // A school email reactivates straight to Active: the email
+            // itself is the verification, so no admin review is needed.
+            var schoolAutoVerify =
+                GetSchoolRoleForEmail(otpRecord.Email) != null;
+
             existingUser.IdNumber = otpRecord.IdNumber;
             existingUser.FullName = otpRecord.FullName;
             existingUser.Email = otpRecord.Email;
@@ -353,18 +447,22 @@ public class AuthController : ControllerBase
             existingUser.IsVerified = true;
             existingUser.IsProfileComplete = false;
             existingUser.PhysicalIdDocument = otpRecord.PhysicalIdDocument;
-            existingUser.PhysicalIdVerificationStatus = "Pending";
-            existingUser.PhysicalIdVerifiedAt = null;
+            existingUser.PhysicalIdVerificationStatus =
+                schoolAutoVerify ? "Verified" : "Pending";
+            existingUser.PhysicalIdVerifiedAt =
+                schoolAutoVerify ? DateTime.Now : null;
             existingUser.PhysicalIdReviewedBy = null;
-            existingUser.AccountStatus = "Pending";
+            existingUser.AccountStatus =
+                schoolAutoVerify ? "Active" : "Pending";
 
             _context.OTPVerifications.Remove(otpRecord);
             await _context.SaveChangesAsync();
 
             return Ok(new
             {
-                message =
-                    "Registration submitted successfully. Your account is pending admin verification.",
+                message = schoolAutoVerify
+                    ? "Email verified! Your PNM email account is now active - you can sign in."
+                    : "Registration submitted successfully. Your account is pending admin verification.",
                 userId = existingUser.Id,
                 accountStatus = existingUser.AccountStatus,
                 physicalIdVerificationStatus =
@@ -377,6 +475,11 @@ public class AuthController : ControllerBase
         // CREATE NEW USER
         // ---------------------------------------------------------
 
+        // A school email activates straight to Active: the email itself
+        // is the verification, so no admin review is needed.
+        var autoVerify =
+            GetSchoolRoleForEmail(otpRecord.Email) != null;
+
         var user = new User
         {
             IdNumber = otpRecord.IdNumber,
@@ -387,8 +490,12 @@ public class AuthController : ControllerBase
             IsVerified = true,
             IsProfileComplete = false,
             PhysicalIdDocument = otpRecord.PhysicalIdDocument,
-            PhysicalIdVerificationStatus = "Pending",
-            AccountStatus = "Pending"
+            PhysicalIdVerificationStatus =
+                autoVerify ? "Verified" : "Pending",
+            PhysicalIdVerifiedAt =
+                autoVerify ? DateTime.Now : null,
+            PhysicalIdReviewedBy = null,
+            AccountStatus = autoVerify ? "Active" : "Pending"
         };
 
         _context.Users.Add(user);
@@ -398,8 +505,9 @@ public class AuthController : ControllerBase
 
         return Ok(new
         {
-            message =
-                "Registration submitted successfully. Your account is pending admin verification.",
+            message = autoVerify
+                ? "Email verified! Your PNM email account is now active - you can sign in."
+                : "Registration submitted successfully. Your account is pending admin verification.",
             userId = user.Id,
             accountStatus = user.AccountStatus,
             physicalIdVerificationStatus = user.PhysicalIdVerificationStatus,
