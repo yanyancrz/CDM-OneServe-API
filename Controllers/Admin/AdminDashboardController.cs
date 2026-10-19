@@ -33,30 +33,10 @@ public class AdminDashboardController : ControllerBase
             // TOTAL USERS
             // -----------------------------------------
             var totalUsers = await usersQuery.CountAsync();
-
-            // -----------------------------------------
-            // RECENT ACTIVITY
-            // Lahat ng ginawa ng lahat ng admin (AdminActivityLogs),
-            // pinakabago muna.
-            // -----------------------------------------
-            var recentActivity = await (
-                from log in _context.AdminActivityLogs
-                where !log.Action.StartsWith("LIBRARY_")
-                join admin in _context.Users
-                    on log.UserId equals admin.Id into adminGroup
-                from admin in adminGroup.DefaultIfEmpty()
-                orderby log.Timestamp descending
-                select new
-                {
-                    id = log.Id,
-                    title = log.Action,
-                    description = admin != null
-                        ? "By " + admin.FullName
-                        : "By Admin",
-                    createdAt = log.Timestamp
-                })
-                .Take(20)
-                .ToListAsync();
+            var totalStudents = await usersQuery
+                .Where(u => u.Role == "Student" && u.AccountStatus != "Deleted").CountAsync();
+            var totalFaculty = await usersQuery
+                .Where(u => u.Role == "Faculty" && u.AccountStatus != "Deleted").CountAsync();
 
             // -----------------------------------------
             // MODULE STATUS
@@ -95,7 +75,8 @@ public class AdminDashboardController : ControllerBase
             return Ok(new
             {
                 totalUsers,
-                recentActivity,
+                totalStudents,
+                totalFaculty,
                 modules
             });
         }
