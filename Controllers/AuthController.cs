@@ -1184,8 +1184,7 @@ public class AuthController : ControllerBase
             "Lost & Found",
             "Clinic",
             "Guidance",
-            "Library",
-            "Marketplace"
+            "Library"
         };
 
         if (!validModules.Contains(module))
@@ -1201,7 +1200,6 @@ public class AuthController : ControllerBase
             "Clinic" => "ClinicAdmin",
             "Guidance" => "GuidanceAdmin",
             "Library" => "LibraryAdmin",
-            "Marketplace" => "MarketplaceAdmin",
             _ => null
         };
 
@@ -1439,11 +1437,7 @@ public class AuthController : ControllerBase
             "GuidanceAdmin",
             "LibraryAdmin",
             "LibraryStaff",
-            "Counselor",
-            "MarketplaceAdmin",
-            // Stall login accounts (one per marketplace workspace). They
-            // operate through marketplace_staff rows and can never buy.
-            "MarketplaceStaff"
+            "Counselor"
         };
 
         if (!string.IsNullOrWhiteSpace(role) && !validRoles.Contains(role))
@@ -1469,8 +1463,7 @@ public class AuthController : ControllerBase
                 "Lost & Found",
                 "Clinic",
                 "Guidance",
-                "Library",
-                "Marketplace"
+                "Library"
             };
 
             if (user.Role == "Admin")
@@ -1493,7 +1486,6 @@ public class AuthController : ControllerBase
                         "Clinic" => "ClinicAdmin",
                         "Guidance" => "GuidanceAdmin",
                         "Library" => "LibraryAdmin",
-                        "Marketplace" => "MarketplaceAdmin",
                         _ => "Admin"
                     };
                 }
@@ -1502,8 +1494,7 @@ public class AuthController : ControllerBase
                 user.Role == "LostFoundAdmin" ||
                 user.Role == "ClinicAdmin" ||
                 user.Role == "GuidanceAdmin" ||
-                user.Role == "LibraryAdmin" ||
-                user.Role == "MarketplaceAdmin")
+                user.Role == "LibraryAdmin")
             {
                 if (!string.IsNullOrWhiteSpace(module))
                 {

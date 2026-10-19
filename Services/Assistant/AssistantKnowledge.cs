@@ -15,19 +15,11 @@ public static class AssistantKnowledge
 
         LIBRARY (/library): browse the catalog (/library/books), reserve a copy
         (/library/reserve), track borrowed books and due dates (/library/loans),
-        renew or return before the due date. Late returns add a daily overdue
-        fine - the exact amount shows on the Loans screen. The Access Pass
+        renew or return before the due date. Late returns suspend borrowing for
+        the rest of the semester, and a lost book must be replaced with an exact
+        copy. The Access Pass
         (/library/access-pass) is a QR code shown at the circulation desk when
         claiming a reserved book.
-
-        MARKETPLACE (/marketplace): CDM BusinessHub sells uniforms and
-        merchandise at the Canteen. The FoodHub has Main FoodHub at the Old
-        Building Lobby and Stall 1 at CDM Ground near the Canteen. Students add
-        to cart (/marketplace/cart), choose Pick Up or Campus Delivery at
-        checkout (/marketplace/checkout) - delivery stays inside the campus at
-        approved locations only, never a home address. Payment is cash on
-        pickup or delivery. Each stall fulfils its own order, tracked
-        separately (/marketplace/orders); orders can be cancelled while early.
 
         GUIDANCE (/guidance): confidential counseling with campus counselors.
         Browse counselors (/guidance/counselors), book an appointment

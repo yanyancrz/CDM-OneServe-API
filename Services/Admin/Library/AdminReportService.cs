@@ -78,24 +78,10 @@ public class AdminReportService : IAdminReportService
             t => t.ReturnDate != null && t.ReturnDate >= from && t.ReturnDate < toEx && t.ReturnDate <= t.DueDate,
             cancellationToken);
 
-        var collected = await loans
-            .Where(t => t.ReturnDate != null && t.ReturnDate >= from && t.ReturnDate < toEx && t.FinePaymentStatus == "Paid")
-            .SumAsync(t => (decimal?)t.Fine, cancellationToken) ?? 0m;
-
-        var outstanding = await loans
-            .Where(t => t.FinePaymentStatus == "Unpaid" || t.FinePaymentStatus == "AddedToAccount")
-            .SumAsync(t => (decimal?)t.Fine, cancellationToken) ?? 0m;
-
         var active = await loans.CountAsync(t => t.ReturnDate == null, cancellationToken);
 
-        // Fines still building up on loans that are overdue right now.
-        var overdueDueDates = await loans
-            .Where(t => t.ReturnDate == null && t.DueDate < now)
-            .Select(t => t.DueDate)
-            .ToListAsync(cancellationToken);
-
-        var accruing = overdueDueDates
-            .Sum(d => Math.Max((now.Date - d.Date).Days, 0) * LibraryDefaults.OverdueFinePerDay);
+        var overdue = await loans.CountAsync(
+            t => t.ReturnDate == null && t.DueDate < now, cancellationToken);
 
         return new ReportSummaryDto
         {
@@ -103,11 +89,8 @@ public class AdminReportService : IAdminReportService
             To = to,
             TotalCirculation = borrowed,
             TotalReturns = returned,
-            FinesCollected = collected,
-            OutstandingFines = outstanding,
-            AccruingFines = accruing,
             ActiveLoans = active,
-            OverdueLoans = overdueDueDates.Count,
+            OverdueLoans = overdue,
             OnTimeReturnRate = returned == 0 ? null : Math.Round(onTime * 100.0 / returned, 1)
         };
     }
@@ -231,13 +214,13 @@ public class AdminReportService : IAdminReportService
     }
 
     // =====================================================
-    // TABLES (CSV exports, fines, overdue)
+    // TABLES (CSV exports: overdue, returns)
     // =====================================================
 
     private sealed record LoanRow(
         int BorrowId, string? PatronId, string? PatronName, string? PatronType, string? Title,
-        DateTime BorrowDate, DateTime DueDate, DateTime? ReturnDate, decimal Fine,
-        string? Condition, string? Payment);
+        DateTime BorrowDate, DateTime DueDate, DateTime? ReturnDate,
+        string? Condition);
 
     private static IQueryable<LoanRow> LoanRows(IQueryable<BorrowTransaction> query) =>
         query.Select(t => new LoanRow(
@@ -249,12 +232,9 @@ public class AdminReportService : IAdminReportService
             t.BorrowDate,
             t.DueDate,
             t.ReturnDate,
-            t.Fine,
-            t.ReturnCondition,
-            t.FinePaymentStatus));
+            t.ReturnCondition));
 
     private static string D(DateTime? date) => date?.ToString("yyyy-MM-dd") ?? string.Empty;
-    private static string Money(decimal value) => value.ToString("0.00");
     private static string S(string? value) => value ?? string.Empty;
 
     private static int OverdueDays(DateTime due, DateTime? returned, DateTime now) =>
@@ -319,7 +299,7 @@ public class AdminReportService : IAdminReportService
                     table = new ExportTableDto
                     {
                         FileName = $"library-{(overdueOnly ? "overdue-books" : "active-loans")}-{now:yyyy-MM-dd}",
-                        Columns = new() { "Transaction", "Patron ID", "Patron", "Type", "Book", "Borrowed", "Due", "Days Overdue", "Fine (PHP)" },
+                        Columns = new() { "Transaction", "Patron ID", "Patron", "Type", "Book", "Borrowed", "Due", "Days Overdue" },
                         Rows = rows.Select(r =>
                         {
                             var days = OverdueDays(r.DueDate, null, now);
@@ -327,9 +307,7 @@ public class AdminReportService : IAdminReportService
                             return new List<string>
                         {
                             r.BorrowId.ToString(), S(r.PatronId), S(r.PatronName), S(r.PatronType), S(r.Title),
-                            D(r.BorrowDate), D(r.DueDate), days.ToString(),
-                            // Fine of an unreturned loan is computed here, never stored.
-                            Money(days * LibraryDefaults.OverdueFinePerDay)
+                            D(r.BorrowDate), D(r.DueDate), days.ToString()
                         };
                         }).ToList()
                     };
@@ -369,35 +347,13 @@ public class AdminReportService : IAdminReportService
                     table = new ExportTableDto
                     {
                         FileName = $"library-return-transactions-{period}",
-                        Columns = new() { "Transaction", "Patron ID", "Patron", "Book", "Borrowed", "Due", "Returned", "Days Overdue", "Fine (PHP)", "Condition", "Payment" },
+                        Columns = new() { "Transaction", "Patron ID", "Patron", "Book", "Borrowed", "Due", "Returned", "Days Overdue", "Condition" },
                         Rows = rows.Select(r => new List<string>
                     {
                         r.BorrowId.ToString(), S(r.PatronId), S(r.PatronName), S(r.Title),
                         D(r.BorrowDate), D(r.DueDate), D(r.ReturnDate),
                         OverdueDays(r.DueDate, r.ReturnDate, now).ToString(),
-                        Money(r.Fine), S(r.Condition), S(r.Payment)
-                    }).ToList()
-                    };
-                    break;
-                }
-
-            case "fines":
-                {
-                    var rows = await LoanRows(loans
-                            .Where(t => t.ReturnDate != null && t.ReturnDate >= from && t.ReturnDate < toEx && t.Fine > 0)
-                            .OrderByDescending(t => t.ReturnDate)
-                            .Take(MaxExportRows))
-                        .ToListAsync(cancellationToken);
-
-                    table = new ExportTableDto
-                    {
-                        FileName = $"library-fine-records-{period}",
-                        Columns = new() { "Transaction", "Patron ID", "Patron", "Book", "Returned", "Days Overdue", "Fine (PHP)", "Payment", "Condition" },
-                        Rows = rows.Select(r => new List<string>
-                    {
-                        r.BorrowId.ToString(), S(r.PatronId), S(r.PatronName), S(r.Title), D(r.ReturnDate),
-                        OverdueDays(r.DueDate, r.ReturnDate, now).ToString(),
-                        Money(r.Fine), S(r.Payment), S(r.Condition)
+                        S(r.Condition)
                     }).ToList()
                     };
                     break;

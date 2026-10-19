@@ -3,6 +3,7 @@ using CDM_OneServe_API.DTOs;
 using CDM_OneServe_API.DTOs.Admin.Library;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
+using CDM_OneServe_API.Services.Admin.Library;
 using CDM_OneServe_API.Services.Notifications;
 using Microsoft.EntityFrameworkCore;
 
@@ -39,7 +40,6 @@ public class BorrowService
                 ReturnDate = b.ReturnDate,
                 RenewalCount = b.RenewalCount,
                 Status = b.Status,
-                Fine = b.Fine,
                 Remarks = b.Remarks
             })
             .ToListAsync();
@@ -66,7 +66,6 @@ public class BorrowService
                 ReturnDate = b.ReturnDate,
                 RenewalCount = b.RenewalCount,
                 Status = b.Status,
-                Fine = b.Fine,
                 Remarks = b.Remarks
             })
             .FirstOrDefaultAsync();
@@ -109,7 +108,6 @@ public class BorrowService
                 ReturnDate = b.ReturnDate,
                 RenewalCount = b.RenewalCount,
                 Status = b.Status,
-                Fine = b.Fine,
                 Remarks = b.Remarks
             })
             .ToListAsync();
@@ -224,7 +222,6 @@ public class BorrowService
         // Not officially borrowed yet.
         transaction.Status = "ForClaiming";
 
-        transaction.Fine = 0;
         transaction.CreatedAt = DateTime.Now;
 
 
@@ -352,8 +349,6 @@ public class BorrowService
 
             Status = transaction.Status,
 
-            Fine = transaction.Fine,
-
             Remarks = transaction.Remarks
         };
 
@@ -370,6 +365,7 @@ public class BorrowService
 
         var borrow = await _context.BorrowTransactions
             .Include(x => x.Book)
+            .Include(x => x.User)
             .FirstOrDefaultAsync(x => x.BorrowId == borrowId);
 
         if (borrow == null)
@@ -396,16 +392,18 @@ public class BorrowService
         // Set Return Date
         borrow.ReturnDate = DateTime.Now;
 
-        // Compute Fine (₱10/day overdue)
-        decimal fine = 0;
-
-        if (borrow.ReturnDate.Value.Date > borrow.DueDate.Date)
+        // A late return suspends the patron for the rest of the semester.
+        // Keep an existing, later ban rather than shortening it.
+        if (borrow.ReturnDate.Value.Date > borrow.DueDate.Date && borrow.User != null)
         {
-            int overdueDays = (borrow.ReturnDate.Value.Date - borrow.DueDate.Date).Days;
-            fine = overdueDays * 10;
-        }
+            var newBan = LibraryDefaults.ResolveSemesterEnd(borrow.ReturnDate.Value)
+                ?? borrow.ReturnDate.Value.Date.AddDays(180);
 
-        borrow.Fine = fine;
+            var current = borrow.User.BorrowBanUntil;
+
+            if (current == null || newBan > current.Value)
+                borrow.User.BorrowBanUntil = newBan;
+        }
 
         // Update Status
         borrow.Status = "Returned";
@@ -438,7 +436,6 @@ public class BorrowService
             ReturnDate = borrow.ReturnDate,
             RenewalCount = borrow.RenewalCount,
             Status = borrow.Status,
-            Fine = borrow.Fine,
             Remarks = borrow.Remarks
         };
 
@@ -532,7 +529,6 @@ public class BorrowService
             : "Eligible",
 
             Status = borrow.Status,
-            Fine = borrow.Fine,
             Remarks = borrow.Remarks
         };
 
@@ -591,7 +587,6 @@ public class BorrowService
                                 : "Eligible",
 
                 Status = x.Status,
-                Fine = x.Fine,
                 Remarks = x.Remarks
             })
 
@@ -629,7 +624,6 @@ public class BorrowService
                 RenewalCount = x.RenewalCount,
                 Status = x.Status,
                 OverdueDays = overdueDays,
-                Fine = overdueDays * 10,
                 Remarks = x.Remarks
             };
         }).ToList();

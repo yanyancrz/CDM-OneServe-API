@@ -406,7 +406,12 @@ public class GuidanceCounselorService
 
         var slots = await _schedule.GetDaySlotsAsync(counselorId, day, ct);
         if (slots.OffDay)
-            return GuidanceResult<RescheduleAvailabilityDto>.Ok(new RescheduleAvailabilityDto { OffDay = true });
+            return GuidanceResult<RescheduleAvailabilityDto>.Ok(new RescheduleAvailabilityDto
+            {
+                OffDay = true,
+                OffReason = slots.OffReason,
+                Holiday = slots.Holiday
+            });
 
         var occupying = GuidanceScheduleService.OccupyingStatuses;
         var busy = await _context.GuidanceAppointments.AnyAsync(a =>
@@ -454,7 +459,13 @@ public class GuidanceCounselorService
 
             var day = await _schedule.GetDaySlotsAsync(counselorId, newDate, ct);
             if (day.OffDay)
+            {
+                if (day.Holiday != null)
+                    return Fail<object>(400, $"That date is a holiday ({day.Holiday}). Please choose another day.");
+                if (!string.IsNullOrWhiteSpace(day.OffReason))
+                    return Fail<object>(400, $"You are marked unavailable on that day ({day.OffReason}). Please choose another day.");
                 return Fail<object>(400, "You have no availability set for that day. Please choose a day within your schedule.");
+            }
             if (!day.AllSlots.Contains(req.TimeSlot))
                 return Fail<object>(400, "That time is outside your availability. Please choose one of the available slots.");
             if (!day.AvailableSlots.Contains(req.TimeSlot))

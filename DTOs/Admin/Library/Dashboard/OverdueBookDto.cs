@@ -10,5 +10,4 @@ public class OverdueBookDto
     public DateTime BorrowDate { get; set; }
     public DateTime DueDate { get; set; }
     public int OverdueDays { get; set; }
-    public decimal Fine { get; set; }
 }

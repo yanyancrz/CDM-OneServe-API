@@ -6,13 +6,14 @@ public class LibraryPolicyDto
 {
     public LibraryPolicySettingsDto Settings { get; set; } = new();
 
+    // The signed-in patron's own borrowing suspension, if any. Null = allowed.
+    public DateTime? BannedUntil { get; set; }
+
     public List<LibraryPolicyTermDto> Terms { get; set; } = new();
 }
 
 public class LibraryPolicySettingsDto
 {
-    public decimal OverdueFinePerDay { get; set; }
-
     public int StudentBorrowLimit { get; set; }
 
     public int FacultyBorrowLimit { get; set; }
@@ -20,6 +21,12 @@ public class LibraryPolicySettingsDto
     public int DefaultLoanDays { get; set; }
 
     public int ReservationPickupDays { get; set; }
+
+    // Semester dates used for the late-return borrowing suspension.
+    public DateTime? FirstSemStart { get; set; }
+    public DateTime? FirstSemEnd { get; set; }
+    public DateTime? SecondSemStart { get; set; }
+    public DateTime? SecondSemEnd { get; set; }
 
     public int[] LoanDayOptions { get; set; } = Array.Empty<int>();
 }

@@ -9,9 +9,6 @@ namespace CDM_OneServe_API.Services.Admin.Library;
 
 public class AdminDashboardService : IAdminDashboardService
 {
-    // Replaced by LibrarySettings.OverdueFinePerDay in Part 13.
-    // This is the ONLY place the default amount lives.
-
     private readonly AppDbContext _db;
 
     public AdminDashboardService(AppDbContext db)
@@ -64,7 +61,6 @@ public class AdminDashboardService : IAdminDashboardService
         limit = Math.Clamp(limit, 1, 50);
 
         var now = DateTime.Now;
-        var finePerDay = await GetFinePerDayAsync(cancellationToken);
 
         var rows = await _db.BorrowTransactions.AsNoTracking()
             .Where(t => t.ReturnDate == null && t.DueDate < now)
@@ -82,7 +78,6 @@ public class AdminDashboardService : IAdminDashboardService
             })
             .ToListAsync(cancellationToken);
 
-        // The fine is calculated here, in C#. The frontend only displays it.
         return rows.Select(r =>
         {
             var overdueDays = Math.Max((now.Date - r.DueDate.Date).Days, 0);
@@ -96,8 +91,7 @@ public class AdminDashboardService : IAdminDashboardService
                 BookTitle = r.BookTitle ?? string.Empty,
                 BorrowDate = r.BorrowDate,
                 DueDate = r.DueDate,
-                OverdueDays = overdueDays,
-                Fine = overdueDays * finePerDay
+                OverdueDays = overdueDays
             };
         }).ToList();
     }
@@ -145,11 +139,5 @@ public class AdminDashboardService : IAdminDashboardService
                 CreatedAt = r.Timestamp
             };
         }).ToList();
-    }
-
-    private Task<decimal> GetFinePerDayAsync(CancellationToken cancellationToken)
-    {
-        // Part 13: read LibrarySettings.OverdueFinePerDay here.
-        return Task.FromResult(LibraryDefaults.OverdueFinePerDay);
     }
 }

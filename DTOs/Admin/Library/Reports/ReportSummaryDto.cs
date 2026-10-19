@@ -8,10 +8,6 @@ public class ReportSummaryDto
     public int TotalCirculation { get; set; }
     public int TotalReturns { get; set; }
 
-    public decimal FinesCollected { get; set; }
-    public decimal OutstandingFines { get; set; }
-    public decimal AccruingFines { get; set; }
-
     public int ActiveLoans { get; set; }
     public int OverdueLoans { get; set; }
 

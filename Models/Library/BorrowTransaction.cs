@@ -26,18 +26,12 @@ public class BorrowTransaction
     [MaxLength(20)]
     public string Status { get; set; } = "Borrowed";
 
-    public decimal Fine { get; set; }
-
     public string? Remarks { get; set; }
 
     // Set when the book is returned (Part 9: Returns).
     // Good | Damaged | Lost
     [MaxLength(20)]
     public string? ReturnCondition { get; set; }
-
-    // Paid | Unpaid | AddedToAccount. Only set when there is a fine.
-    [MaxLength(30)]
-    public string? FinePaymentStatus { get; set; }
 
     public DateTime CreatedAt { get; set; }
 

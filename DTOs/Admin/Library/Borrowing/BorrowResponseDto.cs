@@ -20,6 +20,5 @@ public class BorrowResponseDto
     public int LoanDays { get; set; }
 
     public int RemainingSlots { get; set; }
-    public decimal FinePerDay { get; set; }
     public string ProcessedBy { get; set; } = string.Empty;
 }

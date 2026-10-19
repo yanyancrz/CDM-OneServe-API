@@ -24,8 +24,6 @@ public class BorrowTransactionDto
 
     public string Status { get; set; } = string.Empty;
 
-    public decimal Fine { get; set; }
-
     public string? Remarks { get; set; }
 
     public int OverdueDays { get; set; }

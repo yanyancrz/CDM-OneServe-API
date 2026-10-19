@@ -109,12 +109,6 @@ public class AdminDashboardController : ControllerBase
                     name = "Guidance",
                     icon = "💬",
                     status = "Online"
-                },
-                new
-                {
-                    name = "Marketplace",
-                    icon = "🛍️",
-                    status = "Online"
                 }
             };
 

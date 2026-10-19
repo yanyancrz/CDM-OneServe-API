@@ -33,9 +33,10 @@ public class AdminTermsService : IAdminTermsService
         ("renewal-policies", "Renewal Policies",
             "A book may be renewed if no other patron has reserved it and it is not overdue. Ask the librarian at the counter."),
         ("overdue-penalty", "Overdue Penalty",
-            $"A fine of PHP {LibraryDefaults.OverdueFinePerDay:0.00} is charged for each day a book is overdue."),
+            "Returning a book after its due date suspends borrowing for the rest of the semester. " +
+            "A lost book must be replaced with an exact copy of the same title."),
         ("lost-book-policy", "Lost Book Policy",
-            "A lost book must be reported to the library right away. The borrower is responsible for replacing it or paying its value."),
+            "A lost book must be reported to the library right away. The borrower is responsible for replacing it with an exact copy of the same title."),
         ("damaged-book-policy", "Damaged Book Policy",
             "Books must be returned in the condition they were borrowed. Damaged books are assessed by the librarian."),
         ("library-hours", "Library Hours",

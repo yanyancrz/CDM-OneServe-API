@@ -6,7 +6,7 @@ namespace CDM_OneServe_API.Services.Notifications;
 /// sanitises size, adds the dedupe key and writes the outbox row.
 /// </summary>
 /// <param name="UserId">Recipient. Always the authenticated owner.</param>
-/// <param name="Module">LostFound | Library | Guidance | Marketplace | Account</param>
+/// <param name="Module">LostFound | Library | Guidance | Account</param>
 /// <param name="Type">Event tag, e.g. "ClaimApproved".</param>
 /// <param name="Title">Short line, max ~90 characters.</param>
 /// <param name="Body">Sentence, max ~400 characters.</param>

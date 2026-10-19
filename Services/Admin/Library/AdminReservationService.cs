@@ -568,7 +568,6 @@ public class AdminReservationService : IAdminReservationService
             BorrowDate = now,
             DueDate = due,
             Status = "Borrowed",
-            Fine = 0,
             RenewalCount = 0,
             Remarks = $"From reservation #{res.ReservationId}",
             CreatedAt = now
@@ -629,7 +628,6 @@ public class AdminReservationService : IAdminReservationService
             DueDate = due,
             LoanDays = loanDays,
             RemainingSlots = Math.Max(0, limit - (activeLoans + 1)),
-            FinePerDay = LibraryDefaults.OverdueFinePerDay,
             ProcessedBy = staffName
         }, 201);
     }
@@ -738,7 +736,8 @@ public class AdminReservationService : IAdminReservationService
                 YearLevel = u.YearLevel,
                 IsVerified = u.IsVerified,
                 IsProfileComplete = u.IsProfileComplete,
-                AccountStatus = u.AccountStatus
+                AccountStatus = u.AccountStatus,
+                BorrowBanUntil = u.BorrowBanUntil
             })
             .FirstOrDefaultAsync(cancellationToken);
 

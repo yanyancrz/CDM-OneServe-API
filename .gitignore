@@ -23,6 +23,9 @@ wwwroot/uploads/
 # the reference lives in the database, the bytes never belong in git.
 App_Data/
 
+# Local database backups (dumps contain data; never belong in git)
+Database/backups/
+
 # Logs
 logs/
 *.log

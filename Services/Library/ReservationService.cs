@@ -548,8 +548,6 @@ public class ReservationService
 
             Status = "Borrowed",
 
-            Fine = 0,
-
             Remarks = reservation.Remarks,
 
             CreatedAt = now
@@ -640,7 +638,6 @@ public class ReservationService
 
             Status = borrow.Status,
 
-            Fine = borrow.Fine,
             Remarks = borrow.Remarks
         };
 

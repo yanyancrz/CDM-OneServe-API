@@ -13,12 +13,12 @@ namespace CDM_OneServe_API.Services.Library;
 /// Runs once at startup, then every 6 hours:
 ///   - books due within 1 day -> "due-soon" notification
 ///   - books past their due date -> "overdue" notification, repeated every
-///     third day while the book stays out so the growing fine stays visible
+///     third day while the book stays out so the reminder keeps coming
 ///   - reservations expiring within 1 day -> "expiring" notification
 ///
 /// The deduplication is per event, per reminder, not per book: a reminder
 /// that has already been written for that exact day count is skipped, and
-/// the next one - with its new fine - is allowed through.
+/// the next one is allowed through.
 /// </summary>
 public class LibraryAlertBackgroundService : BackgroundService
 {
@@ -129,7 +129,7 @@ public class LibraryAlertBackgroundService : BackgroundService
                 Type = "due-soon",
                 Title = "Book due soon",
                 Message =
-                    $"Your borrowed book \"{bookTitle}\" is due on {dueLabel}. Return or renew it to avoid a fine.",
+                    $"Your borrowed book \"{bookTitle}\" is due on {dueLabel}. Return or renew it to avoid a borrowing suspension.",
                 IsRead = false,
                 CreatedAt = DateTime.Now,
             });
@@ -139,7 +139,7 @@ public class LibraryAlertBackgroundService : BackgroundService
                 "Library",
                 "due-soon",
                 "Book due soon",
-                $"Your borrowed book \"{bookTitle}\" is due on {dueLabel}. Return or renew it to avoid a fine.",
+                $"Your borrowed book \"{bookTitle}\" is due on {dueLabel}. Return or renew it to avoid a borrowing suspension.",
                 PushRoutes.Resolve("Library", "due-soon"),
                 $"duesoon:{loan.BorrowId}",
                 OnceOnly: true), stoppingToken);
@@ -158,8 +158,7 @@ public class LibraryAlertBackgroundService : BackgroundService
     // ---------------------------------------------------------
     // The first reminder goes out the moment a book is overdue, then once
     // every ReminderEveryDays while it stays out. A loan that is three weeks
-    // late must not go quiet after one push: the fine keeps growing every
-    // day, and the reminder has to carry the new figure.
+    // late must not go quiet after one push: the reminder has to keep coming.
 
     private const int ReminderEveryDays = 3;
 
@@ -186,11 +185,10 @@ public class LibraryAlertBackgroundService : BackgroundService
             var dueLabel = loan.DueDate.ToString("MMM dd, yyyy");
 
             var overdueDays = (now - loan.DueDate).Days;
-            var fine = overdueDays * 10;
 
             // TimeSpan.Days truncates, so a book that went overdue ten hours
             // ago is "0 days" - that is still the first reminder, and it has
-            // to go out with a zero fine rather than being skipped.
+            // to go out rather than being skipped.
             var isFirstReminder = overdueDays == 0;
             var isRepeatReminder = overdueDays > 0 && overdueDays % ReminderEveryDays == 0;
 
@@ -198,11 +196,11 @@ public class LibraryAlertBackgroundService : BackgroundService
                 continue;
 
             var message =
-                $"Your borrowed book \"{bookTitle}\" is {overdueDays} day(s) overdue (due {dueLabel}). Fine: PHP {fine}. Return it as soon as possible.";
+                $"Your borrowed book \"{bookTitle}\" is {overdueDays} day(s) overdue (due {dueLabel}). Return it as soon as possible or your borrowing will be suspended for the semester.";
 
             // Deduplicated by the whole message, not by the book title: the
-            // day count and the fine are part of the text, so each reminder
-            // is its own row while the same one is never written twice.
+            // day count is part of the text, so each reminder is its own row
+            // while the same one is never written twice.
             //
             // The old check (Message.Contains(bookTitle)) answered "was this
             // book ever overdue?" - which is why a second reminder could

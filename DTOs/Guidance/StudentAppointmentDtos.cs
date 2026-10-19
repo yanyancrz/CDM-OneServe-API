@@ -50,6 +50,12 @@ public class GuidanceDayAvailabilityDto
     public List<string> AllSlots { get; set; } = new();
     public List<string> AvailableSlots { get; set; } = new();
     public List<string> BookedSlots { get; set; } = new();
+
+    /// <summary>Why the day is closed: the counselor's leave note, or "Holiday: X".</summary>
+    public string? OffReason { get; set; }
+
+    /// <summary>The public holiday name when the date is a holiday, else null.</summary>
+    public string? Holiday { get; set; }
 }
 
 public class GuidanceRescheduleDto

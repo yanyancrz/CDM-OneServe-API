@@ -8,7 +8,12 @@ public record GuidanceDaySlots(
     bool OffDay,
     List<string> AllSlots,
     List<string> AvailableSlots,
-    List<string> BookedSlots);
+    List<string> BookedSlots,
+    // Why the day is closed ("Holiday: X" or the counselor's leave note), when
+    // we know. Null means "no weekly schedule" (weekend / nothing set).
+    string? OffReason = null,
+    // The public holiday name when this date is one, so the UI can say so.
+    string? Holiday = null);
 
 /// <summary>
 /// THE one definition of "which 30-minute slots does this counselor have on this
@@ -25,11 +30,16 @@ public class GuidanceScheduleService
 
     private readonly AppDbContext _context;
     private readonly GuidanceSettingsService _settings;
+    private readonly GuidanceHolidayService _holidays;
 
-    public GuidanceScheduleService(AppDbContext context, GuidanceSettingsService settings)
+    public GuidanceScheduleService(
+        AppDbContext context,
+        GuidanceSettingsService settings,
+        GuidanceHolidayService holidays)
     {
         _context = context;
         _settings = settings;
+        _holidays = holidays;
     }
 
     public static List<string> GenerateSlots(TimeSpan start, TimeSpan end, int slotMinutes = 30)
@@ -50,11 +60,23 @@ public class GuidanceScheduleService
 
     public async Task<GuidanceDaySlots> GetDaySlotsAsync(int counselorId, DateOnly date, CancellationToken ct = default)
     {
+        // A public holiday closes EVERY counselor's date - checked before the
+        // weekly blocks so the whole school is treated the same way, and the
+        // student UI can show the holiday name instead of a generic "off day".
+        var holiday = await _holidays.GetHolidayNameAsync(date, ct);
+        if (holiday != null)
+            return new GuidanceDaySlots(true, new(), new(), new(), $"Holiday: {holiday}", holiday);
+
         // A day-off closes this single date no matter what the weekly blocks say.
-        var isDayOff = await _context.GuidanceDayOffs.AsNoTracking()
-            .AnyAsync(d => d.CounselorId == counselorId && d.Date == date, ct);
-        if (isDayOff)
-            return new GuidanceDaySlots(true, new(), new(), new());
+        var dayOff = await _context.GuidanceDayOffs.AsNoTracking()
+            .Where(d => d.CounselorId == counselorId && d.Date == date)
+            .Select(d => new { d.Reason })
+            .FirstOrDefaultAsync(ct);
+        if (dayOff != null)
+        {
+            var reason = string.IsNullOrWhiteSpace(dayOff.Reason) ? "On leave" : dayOff.Reason!.Trim();
+            return new GuidanceDaySlots(true, new(), new(), new(), reason, null);
+        }
 
         var dow = (int)date.DayOfWeek;   // 0 = Sunday ... 6 = Saturday
 

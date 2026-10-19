@@ -16,6 +16,31 @@ public class BookService
     }
 
     // =========================================================
+    // BOOK SCOPE
+    // Books may only belong to ICS, ITE or IBE.
+    // =========================================================
+    private static readonly string[] AllowedInstitutes = { "ICS", "ITE", "IBE" };
+
+    private static readonly string[] AllowedInstituteNames =
+    {
+        "Institute of Computing Studies",
+        "Institute of Teacher Education",
+        "Institute of Business Education"
+    };
+
+    // Empty is allowed; otherwise the institute must be ICS, ITE or IBE
+    // (the short code or the full institute name).
+    private static bool IsAllowedInstitute(string? institute)
+    {
+        if (string.IsNullOrWhiteSpace(institute)) return true;
+
+        var value = institute.Trim();
+
+        return AllowedInstitutes.Any(a => a.Equals(value, StringComparison.OrdinalIgnoreCase))
+            || AllowedInstituteNames.Any(n => value.Contains(n, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // =========================================================
     // MAP BOOK -> DTO
     // =========================================================
     private static BookDto MapToDto(Book book)
@@ -127,6 +152,15 @@ public class BookService
             response.Success = false;
             response.Message =
                 "A book with the same ISBN already exists.";
+
+            return response;
+        }
+
+        if (!IsAllowedInstitute(dto.Institute))
+        {
+            response.Success = false;
+            response.Message =
+                "Institute must be one of ICS, ITE, or IBE.";
 
             return response;
         }
@@ -281,6 +315,16 @@ public class BookService
 
             response.Message =
                 "Another book already uses this ISBN.";
+
+            return response;
+        }
+
+        if (!IsAllowedInstitute(dto.Institute))
+        {
+            response.Success = false;
+
+            response.Message =
+                "Institute must be one of ICS, ITE, or IBE.";
 
             return response;
         }

@@ -14,5 +14,4 @@ public class BorrowListItemDto
     public DateTime? ReturnDate { get; set; }
     public string Status { get; set; } = string.Empty; // Borrowed | Overdue | Returned
     public int OverdueDays { get; set; }
-    public decimal Fine { get; set; }
 }

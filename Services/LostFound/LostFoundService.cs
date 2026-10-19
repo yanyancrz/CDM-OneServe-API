@@ -399,7 +399,7 @@ public class LostFoundService
 
     /// <summary>
     /// Stores a report photo under wwwroot/uploads/lostfound and returns
-    /// the ROOT-RELATIVE path (the same convention the marketplace uses),
+    /// the ROOT-RELATIVE path,
     /// so the frontend can resolve it against the API origin.
     /// </summary>
     public async Task<LostFoundResult<string>> UploadImageAsync(IFormFile? file)
@@ -2158,8 +2158,8 @@ public class LostFoundService
     // Lost & Found keeps its own /api/lostfound/notifications/push/*
     // routes for backwards compatibility, but the store itself is the
     // shared PushSubscription table owned by PushSubscriptionService,
-    // so a subscription enabled here also receives Library, Guidance and
-    // Marketplace notifications. No Firebase anywhere in OneServe.
+    // so a subscription enabled here also receives Library and Guidance
+    // notifications. No Firebase anywhere in OneServe.
     // =====================================================
 
     public async Task<LostFoundResult> SubscribePushAsync(int userId, PushSubscriptionDto dto, string? userAgent)

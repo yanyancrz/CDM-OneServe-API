@@ -42,18 +42,13 @@ public class AdminLibraryReportsController : ControllerBase
         [FromQuery] ReportFilterDto filter, [FromQuery] int limit = 10, CancellationToken cancellationToken = default)
         => Ok(ApiResponse.Ok(await _reports.GetTopBooksAsync(filter, limit, cancellationToken)));
 
-    // GET /api/admin/library/reports/fines?from=&to=
-    [HttpGet("fines")]
-    public async Task<IActionResult> GetFines([FromQuery] ReportFilterDto filter, CancellationToken cancellationToken)
-        => ToAction(await _reports.GetTableAsync("fines", filter, cancellationToken));
-
     // GET /api/admin/library/reports/overdue
     [HttpGet("overdue")]
     public async Task<IActionResult> GetOverdue([FromQuery] ReportFilterDto filter, CancellationToken cancellationToken)
         => ToAction(await _reports.GetTableAsync("overdue", filter, cancellationToken));
 
     // GET /api/admin/library/reports/export/{dataset}?from=&to=
-    // dataset: catalog | active-loans | overdue | borrows | returns | reservations | fines
+    // dataset: catalog | active-loans | overdue | borrows | returns | reservations
     [HttpGet("export/{dataset}")]
     public async Task<IActionResult> Export(string dataset, [FromQuery] ReportFilterDto filter, CancellationToken cancellationToken)
         => ToAction(await _reports.GetTableAsync(dataset, filter, cancellationToken));

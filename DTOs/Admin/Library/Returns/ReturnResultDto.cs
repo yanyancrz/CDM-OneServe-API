@@ -13,11 +13,11 @@ public class ReturnResultDto
     public DateTime ReturnDate { get; set; }
 
     public int OverdueDays { get; set; }
-    public decimal Fine { get; set; }
-    public decimal FinePerDay { get; set; }
+
+    // Set when a late return bans the patron for the rest of the semester.
+    public DateTime? BannedUntil { get; set; }
 
     public string Condition { get; set; } = string.Empty;
-    public string? PaymentStatus { get; set; }
 
     public bool CopyReturnedToShelf { get; set; }
     public string ProcessedBy { get; set; } = string.Empty;

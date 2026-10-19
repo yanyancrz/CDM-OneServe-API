@@ -115,7 +115,9 @@ public class GuidanceStudentService
             OffDay = slots.OffDay,
             AllSlots = slots.AllSlots,
             AvailableSlots = slots.AvailableSlots,
-            BookedSlots = slots.BookedSlots
+            BookedSlots = slots.BookedSlots,
+            OffReason = slots.OffReason,
+            Holiday = slots.Holiday
         });
     }
 
@@ -180,7 +182,13 @@ public class GuidanceStudentService
         // The slot must be one of the counselor's real, configured slots that day.
         var day = await _schedule.GetDaySlotsAsync(req.CounselorId, date, ct);
         if (day.OffDay)
+        {
+            if (day.Holiday != null)
+                return Fail(400, $"That date is a holiday ({day.Holiday}). Please choose another date.");
+            if (!string.IsNullOrWhiteSpace(day.OffReason))
+                return Fail(400, "That counselor is on leave on the selected day. Please choose another date.");
             return Fail(400, "That counselor is not available on the selected day. Please choose another date.");
+        }
         if (!day.AllSlots.Contains(req.TimeSlot))
             return Fail(400, "That time is outside the counselor's available hours. Please choose one of the available times.");
 

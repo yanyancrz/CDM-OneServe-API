@@ -14,8 +14,8 @@ namespace CDM_OneServe_API.Services.Library;
 /// module - "New from Library", "New from Lost &amp; Found", and so on.
 ///
 /// Guidance already writes to the global table directly (GUIDANCE_*
-/// types), so it needs no mirror. Clinic is a separate system, and
-/// Marketplace has no notifications. Modules with their own table
+/// types), so it needs no mirror. Clinic is a separate system.
+/// Modules with their own table
 /// are handled below, one block each.
 ///
 /// Each mirrored row's Type is "{PREFIX}_{moduleNotificationId}" - the

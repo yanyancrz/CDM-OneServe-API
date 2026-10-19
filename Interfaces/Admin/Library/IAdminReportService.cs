@@ -13,6 +13,6 @@ public interface IAdminReportService
 
     Task<List<TopBookDto>> GetTopBooksAsync(ReportFilterDto filter, int limit, CancellationToken cancellationToken);
 
-    // dataset: catalog | active-loans | overdue | borrows | returns | reservations | fines
+    // dataset: catalog | active-loans | overdue | borrows | returns | reservations
     Task<LibraryResult<ExportTableDto>> GetTableAsync(string dataset, ReportFilterDto filter, CancellationToken cancellationToken);
 }

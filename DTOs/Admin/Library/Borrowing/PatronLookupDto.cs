@@ -19,4 +19,7 @@ public class PatronLookupDto
 
     public bool CanBorrow { get; set; }
     public string? Reason { get; set; }
+
+    // Set when the patron is suspended after a late return.
+    public DateTime? BannedUntil { get; set; }
 }

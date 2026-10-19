@@ -12,7 +12,6 @@ namespace CDM_OneServe_API.Services.Admin.Library;
 public class AdminReturnService : IAdminReturnService
 {
     private static readonly string[] Conditions = { "Good", "Damaged", "Lost" };
-    private static readonly string[] PaymentStatuses = { "Paid", "Unpaid", "AddedToAccount" };
 
     private readonly AppDbContext _db;
     private readonly IAdminLibraryActivityLogger _activity;
@@ -26,13 +25,6 @@ public class AdminReturnService : IAdminReturnService
         _db = db;
         _activity = activity;
         _push = push;
-    }
-
-    // The single place the fine is calculated.
-    private static (int Days, decimal Fine) ComputeFine(DateTime dueDate, DateTime returnDate)
-    {
-        var days = Math.Max((returnDate.Date - dueDate.Date).Days, 0);
-        return (days, days * LibraryDefaults.OverdueFinePerDay);
     }
 
     private sealed record Row(
@@ -56,7 +48,7 @@ public class AdminReturnService : IAdminReturnService
 
     private static ReturnLoanDto ToDto(Row r, DateTime now)
     {
-        var (days, fine) = ComputeFine(r.DueDate, now);
+        var overdueDays = Math.Max((now.Date - r.DueDate.Date).Days, 0);
 
         return new ReturnLoanDto
         {
@@ -72,9 +64,7 @@ public class AdminReturnService : IAdminReturnService
             BorrowDate = r.BorrowDate,
             DueDate = r.DueDate,
             IsOverdue = r.DueDate < now,
-            OverdueDays = days,
-            Fine = fine,
-            FinePerDay = LibraryDefaults.OverdueFinePerDay
+            OverdueDays = overdueDays
         };
     }
 
@@ -138,15 +128,12 @@ public class AdminReturnService : IAdminReturnService
     public async Task<LibraryResult<ReturnResultDto>> ReturnAsync(ReturnBookDto dto, int staffId, CancellationToken cancellationToken)
     {
         var condition = dto.Condition?.Trim() ?? string.Empty;
-        var payment = string.IsNullOrWhiteSpace(dto.PaymentStatus) ? null : dto.PaymentStatus.Trim();
 
         if (!Conditions.Contains(condition))
             return LibraryResult<ReturnResultDto>.Failure(400, "Choose the book condition: Good, Damaged, or Lost.");
 
-        if (payment != null && !PaymentStatuses.Contains(payment))
-            return LibraryResult<ReturnResultDto>.Failure(400, "Choose a valid payment status.");
-
-        var loan = await _db.BorrowTransactions.AsNoTracking()
+        // Tracked on purpose: a late return has to write the patron's ban.
+        var loan = await _db.BorrowTransactions
             .Include(t => t.User)
             .Include(t => t.Book)
             .FirstOrDefaultAsync(t => t.BorrowId == dto.TransactionId, cancellationToken);
@@ -155,13 +142,8 @@ public class AdminReturnService : IAdminReturnService
         if (loan.ReturnDate != null) return LibraryResult<ReturnResultDto>.Failure(409, "This book was already returned.");
 
         var now = DateTime.Now;
-        var (days, fine) = ComputeFine(loan.DueDate, now);
-
-        // A fine needs a payment status. No fine means nothing to record.
-        if (fine > 0 && payment == null)
-            return LibraryResult<ReturnResultDto>.Failure(400, "Choose the fine payment status.");
-
-        if (fine == 0) payment = null;
+        var isLate = now.Date > loan.DueDate.Date;
+        var overdueDays = Math.Max((now.Date - loan.DueDate.Date).Days, 0);
 
         var title = loan.Book?.Title ?? "the book";
         var patron = loan.User?.FullName ?? "a patron";
@@ -178,9 +160,7 @@ public class AdminReturnService : IAdminReturnService
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.ReturnDate, now)
                 .SetProperty(t => t.Status, "Returned")
-                .SetProperty(t => t.Fine, fine)
                 .SetProperty(t => t.ReturnCondition, condition)
-                .SetProperty(t => t.FinePaymentStatus, payment)
                 .SetProperty(t => t.Remarks, remarks), cancellationToken);
 
         if (changed == 0)
@@ -204,6 +184,23 @@ public class AdminReturnService : IAdminReturnService
         }
         // Damaged: the copy stays off the shelf until the Head fixes the totals.
 
+        // A late return suspends the patron for the rest of the semester.
+        // Keep an existing, later ban rather than shortening it.
+        DateTime? bannedUntil = null;
+
+        if (isLate && loan.User != null)
+        {
+            var newBan = LibraryDefaults.ResolveSemesterEnd(now) ?? now.Date.AddDays(180);
+            var current = loan.User.BorrowBanUntil;
+
+            if (current == null || newBan > current.Value)
+            {
+                loan.User.BorrowBanUntil = newBan;
+            }
+
+            bannedUntil = loan.User.BorrowBanUntil;
+        }
+
         _db.LibraryActivities.Add(new LibraryActivity
         {
             UserId = loan.UserId,
@@ -214,21 +211,19 @@ public class AdminReturnService : IAdminReturnService
             CreatedAt = now
         });
 
+        var returnMessage = bannedUntil.HasValue
+            ? $"'{title}' was returned late. Your borrowing is suspended for the rest of the semester (until {bannedUntil:MMM d, yyyy})."
+            : $"'{title}' was returned. Thank you!";
+
         _db.LibraryNotifications.Add(new LibraryNotification
         {
             UserId = loan.UserId,
             Type = "book-returned",
             Title = "Book Returned",
-            Message = fine > 0
-                ? $"'{title}' was returned. Overdue fine: PHP {fine:N2} ({payment})."
-                : $"'{title}' was returned. Thank you!",
+            Message = returnMessage,
             IsRead = false,
             CreatedAt = now
         });
-
-        var returnMessage = fine > 0
-            ? $"'{title}' was returned. Overdue fine: PHP {fine:N2} ({payment})."
-            : $"'{title}' was returned. Thank you!";
 
         await _push.EnqueueAsync(new PushNotification(
             UserId: loan.UserId,
@@ -242,9 +237,9 @@ public class AdminReturnService : IAdminReturnService
         _activity.Add(staffId, "LIBRARY_BOOK_RETURNED",
             $"received the return of \"{title}\" from {patron} ({condition})");
 
-        if (fine > 0)
-            _activity.Add(staffId, "LIBRARY_FINE_RECORDED",
-                $"recorded a fine of PHP {fine:N2} for {patron} ({payment})");
+        if (bannedUntil.HasValue)
+            _activity.Add(staffId, "LIBRARY_BORROW_BAN",
+                $"suspended {patron} from borrowing until {bannedUntil:MMM d, yyyy} (late return)");
 
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -263,11 +258,9 @@ public class AdminReturnService : IAdminReturnService
             BorrowDate = loan.BorrowDate,
             DueDate = loan.DueDate,
             ReturnDate = now,
-            OverdueDays = days,
-            Fine = fine,
-            FinePerDay = LibraryDefaults.OverdueFinePerDay,
+            OverdueDays = overdueDays,
+            BannedUntil = bannedUntil,
             Condition = condition,
-            PaymentStatus = payment,
             CopyReturnedToShelf = backOnShelf,
             ProcessedBy = staffName
         });

@@ -216,6 +216,15 @@ public class LibraryScannerService
                 reservedBooks, activeLoans);
         }
 
+        // A late return suspends borrowing for the rest of the semester.
+        if (LibraryDefaults.IsBanned(user.BorrowBanUntil, now))
+        {
+            return CreateResult(user, false, 0, borrowLimit,
+                "Borrowing Suspended",
+                $"Borrowing is suspended for this semester (until {user.BorrowBanUntil:MMM d, yyyy}).",
+                reservedBooks, activeLoans);
+        }
+
         // ==========================================
         // COUNT ACTIVE BORROWED BOOKS
         // ==========================================

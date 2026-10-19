@@ -6,7 +6,4 @@ public class ReturnBookDto
 
     // Good | Damaged | Lost
     public string Condition { get; set; } = string.Empty;
-
-    // Paid | Unpaid | AddedToAccount. Required only when there is a fine.
-    public string? PaymentStatus { get; set; }
 }

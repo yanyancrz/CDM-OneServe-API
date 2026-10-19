@@ -14,7 +14,7 @@ public class ApiResponse<T>
     public bool Success { get; set; }
 
     // WhenWritingDefault rather than WhenWritingNull: T can be a value type
-    // (bool, int) when a service returns MarketplaceResult<bool>, and
+    // (bool, int) when a service returns a value type, and
     // WhenWritingNull is not valid on a value-type member even when T is
     // Nullable<T>. Default for reference types is null, so the behaviour is
     // unchanged for every existing caller.

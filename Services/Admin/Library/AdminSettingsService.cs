@@ -30,8 +30,9 @@ public class AdminSettingsService : IAdminSettingsService
     }
 
     private static void Apply(LibrarySettings s) =>
-        LibraryDefaults.Apply(s.OverdueFinePerDay, s.StudentBorrowLimit, s.FacultyBorrowLimit,
-            s.DefaultLoanDays, s.ReservationPickupDays);
+        LibraryDefaults.Apply(s.StudentBorrowLimit, s.FacultyBorrowLimit,
+            s.DefaultLoanDays, s.ReservationPickupDays,
+            s.FirstSemStart, s.FirstSemEnd, s.SecondSemStart, s.SecondSemEnd);
 
     public async Task<LibrarySettingsDto> GetAsync(CancellationToken cancellationToken)
     {
@@ -44,11 +45,14 @@ public class AdminSettingsService : IAdminSettingsService
             // No row yet: show what the system is using right now.
             return new LibrarySettingsDto
             {
-                OverdueFinePerDay = LibraryDefaults.OverdueFinePerDay,
                 StudentBorrowLimit = LibraryDefaults.StudentBorrowLimit,
                 FacultyBorrowLimit = LibraryDefaults.FacultyBorrowLimit,
                 DefaultLoanDays = LibraryDefaults.DefaultLoanDays,
                 ReservationPickupDays = LibraryDefaults.ReservationPickupDays,
+                FirstSemStart = LibraryDefaults.FirstSemStart,
+                FirstSemEnd = LibraryDefaults.FirstSemEnd,
+                SecondSemStart = LibraryDefaults.SecondSemStart,
+                SecondSemEnd = LibraryDefaults.SecondSemEnd,
                 LoanDayOptions = LibraryDefaults.LoanDayOptions
             };
         }
@@ -81,18 +85,21 @@ public class AdminSettingsService : IAdminSettingsService
             _db.LibrarySettingsRecords.Add(row);
         }
 
-        var before = $"fine {row.OverdueFinePerDay:0.00}, limits {row.StudentBorrowLimit}/{row.FacultyBorrowLimit}, " +
+        var before = $"limits {row.StudentBorrowLimit}/{row.FacultyBorrowLimit}, " +
                      $"loan {row.DefaultLoanDays}d, pickup {row.ReservationPickupDays}d";
 
-        row.OverdueFinePerDay = Math.Round(dto.OverdueFinePerDay, 2);
         row.StudentBorrowLimit = dto.StudentBorrowLimit;
         row.FacultyBorrowLimit = dto.FacultyBorrowLimit;
         row.DefaultLoanDays = dto.DefaultLoanDays;
         row.ReservationPickupDays = dto.ReservationPickupDays;
+        row.FirstSemStart = dto.FirstSemStart;
+        row.FirstSemEnd = dto.FirstSemEnd;
+        row.SecondSemStart = dto.SecondSemStart;
+        row.SecondSemEnd = dto.SecondSemEnd;
         row.UpdatedAt = DateTime.Now;
         row.UpdatedBy = headId;
 
-        var after = $"fine {row.OverdueFinePerDay:0.00}, limits {row.StudentBorrowLimit}/{row.FacultyBorrowLimit}, " +
+        var after = $"limits {row.StudentBorrowLimit}/{row.FacultyBorrowLimit}, " +
                     $"loan {row.DefaultLoanDays}d, pickup {row.ReservationPickupDays}d";
 
         _activity.Add(headId, "LIBRARY_SETTINGS_UPDATED", $"changed the library settings ({before} to {after})");
@@ -107,9 +114,6 @@ public class AdminSettingsService : IAdminSettingsService
 
     private static string? Validate(UpdateLibrarySettingsDto d)
     {
-        if (d.OverdueFinePerDay < 0 || d.OverdueFinePerDay > 1000)
-            return "The overdue fine per day must be between 0 and 1,000.";
-
         if (d.StudentBorrowLimit < 1 || d.StudentBorrowLimit > 50)
             return "The student borrowing limit must be between 1 and 50.";
 
@@ -122,16 +126,27 @@ public class AdminSettingsService : IAdminSettingsService
         if (d.ReservationPickupDays < 1 || d.ReservationPickupDays > 14)
             return "The reservation pickup period must be between 1 and 14 days.";
 
+        // Semester dates are optional. When both ends of a semester are set,
+        // the start must not be after the end.
+        if (d.FirstSemStart is { } fs && d.FirstSemEnd is { } fe && fs.Date > fe.Date)
+            return "The first semester start cannot be after its end.";
+
+        if (d.SecondSemStart is { } ss && d.SecondSemEnd is { } se && ss.Date > se.Date)
+            return "The second semester start cannot be after its end.";
+
         return null;
     }
 
     private static LibrarySettingsDto ToDto(LibrarySettings s, string? updatedByName) => new()
     {
-        OverdueFinePerDay = s.OverdueFinePerDay,
         StudentBorrowLimit = s.StudentBorrowLimit,
         FacultyBorrowLimit = s.FacultyBorrowLimit,
         DefaultLoanDays = s.DefaultLoanDays,
         ReservationPickupDays = s.ReservationPickupDays,
+        FirstSemStart = s.FirstSemStart,
+        FirstSemEnd = s.FirstSemEnd,
+        SecondSemStart = s.SecondSemStart,
+        SecondSemEnd = s.SecondSemEnd,
         UpdatedAt = s.UpdatedAt,
         UpdatedByName = updatedByName,
         LoanDayOptions = LibraryDefaults.LoanDayOptions

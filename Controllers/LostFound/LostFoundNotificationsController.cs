@@ -56,7 +56,7 @@ public class LostFoundNotificationsController : LostFoundControllerBase
     /// Stores the browser's web-push subscription (endpoint keyed, so
     /// re-subscribing updates instead of duplicating). The row lands in the
     /// shared PushSubscriptions table, so one subscription here also
-    /// receives Library, Guidance and Marketplace push notifications.
+    /// receives Library and Guidance push notifications.
     /// </summary>
     [HttpPost("push/subscribe")]
     public async Task<IActionResult> SubscribePush(PushSubscriptionDto dto)

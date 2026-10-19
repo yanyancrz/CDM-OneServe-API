@@ -64,4 +64,8 @@ public class User
     // Registration Verification Status
     public string AccountStatus { get; set; }
         = "Pending";
+
+    // Set when a book is returned late: the patron cannot borrow again until
+    // this date (the end of the semester in progress). Null means no ban.
+    public DateTime? BorrowBanUntil { get; set; }
 }

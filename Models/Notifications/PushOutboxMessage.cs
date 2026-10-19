@@ -29,7 +29,7 @@ public class PushOutboxMessage
     /// </summary>
     public int? PushSubscriptionId { get; set; }
 
-    /// <summary>Module tag: LostFound, Library, Guidance, Marketplace, Account.</summary>
+    /// <summary>Module tag: LostFound, Library, Guidance, Account.</summary>
     public string Module { get; set; } = "General";
 
     /// <summary>Event tag, e.g. "ClaimApproved" or "reservation-ready".</summary>

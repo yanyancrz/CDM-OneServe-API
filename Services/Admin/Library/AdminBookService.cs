@@ -17,6 +17,16 @@ public class AdminBookService : IAdminBookService
     private static readonly string[] ImageExtensions = { ".jpg", ".jpeg", ".png", ".webp" };
     private static readonly string[] PdfExtensions = { ".pdf" };
 
+    // Books may only belong to these three institutes.
+    private static readonly string[] AllowedInstitutes = { "ICS", "ITE", "IBE" };
+
+    private static readonly string[] AllowedInstituteNames =
+    {
+        "Institute of Computing Studies",
+        "Institute of Teacher Education",
+        "Institute of Business Education"
+    };
+
     // Includes "Reserved", the status the mobile app actually creates.
     private static readonly string[] ActiveReservationStatuses = ReservationStatuses.Active;
 
@@ -293,6 +303,18 @@ public class AdminBookService : IAdminBookService
     private static string? Clean(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Empty is allowed; otherwise the institute must be ICS, ITE or IBE
+    // (the short code or the full institute name).
+    private static bool IsAllowedInstitute(string? institute)
+    {
+        if (string.IsNullOrWhiteSpace(institute)) return true;
+
+        var value = institute.Trim();
+
+        return AllowedInstitutes.Any(a => a.Equals(value, StringComparison.OrdinalIgnoreCase))
+            || AllowedInstituteNames.Any(n => value.Contains(n, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static void Apply(Book book, CreateBookDto d)
     {
         book.BookCode = Clean(d.BookCode);
@@ -319,6 +341,8 @@ public class AdminBookService : IAdminBookService
         if (string.IsNullOrWhiteSpace(d.Title)) return "Title is required.";
         if (string.IsNullOrWhiteSpace(d.Author)) return "Author is required.";
         if (string.IsNullOrWhiteSpace(d.ISBN)) return "ISBN is required.";
+
+        if (!IsAllowedInstitute(d.Institute)) return "Institute must be one of ICS, ITE, or IBE.";
 
         if (d.Title.Trim().Length > 255) return "Title must be 255 characters or fewer.";
         if (d.Author.Trim().Length > 255) return "Author must be 255 characters or fewer.";

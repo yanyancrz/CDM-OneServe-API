@@ -166,7 +166,7 @@ public class AdminLibraryFacultyService : IAdminLibraryFacultyService
     private sealed record LoanRow(
         int BorrowId, int BookId, string Title, string Author,
         DateTime BorrowDate, DateTime DueDate, DateTime? ReturnDate,
-        string Status, decimal StoredFine);
+        string Status);
 
     private IQueryable<LoanRow> LoanRows(int userId) =>
         _db.BorrowTransactions.AsNoTracking()
@@ -179,11 +179,8 @@ public class AdminLibraryFacultyService : IAdminLibraryFacultyService
                 t.BorrowDate,
                 t.DueDate,
                 t.ReturnDate,
-                t.Status,
-                t.Fine));
+                t.Status));
 
-    // Fine of an unreturned loan is computed here in C#. A returned loan
-    // keeps the fine that was stored when it was returned.
     private static StudentLoanDto ToLoanDto(LoanRow r)
     {
         var now = DateTime.Now;
@@ -202,8 +199,7 @@ public class AdminLibraryFacultyService : IAdminLibraryFacultyService
             ReturnDate = r.ReturnDate,
             Status = r.Status,
             IsOverdue = isOverdue,
-            OverdueDays = overdueDays,
-            Fine = isActive ? overdueDays * LibraryDefaults.OverdueFinePerDay : r.StoredFine
+            OverdueDays = overdueDays
         };
     }
 }

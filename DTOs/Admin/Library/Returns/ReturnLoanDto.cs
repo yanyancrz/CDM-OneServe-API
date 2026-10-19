@@ -19,8 +19,4 @@ public class ReturnLoanDto
 
     public bool IsOverdue { get; set; }
     public int OverdueDays { get; set; }
-
-    // Official amount if returned right now. Recomputed again when the return is saved.
-    public decimal Fine { get; set; }
-    public decimal FinePerDay { get; set; }
 }

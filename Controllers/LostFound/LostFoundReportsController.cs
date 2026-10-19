@@ -11,7 +11,7 @@ namespace CDM_OneServe_API.Controllers.LostFound;
 /// Lost &amp; Found reports - the public board plus the
 /// signed-in user's own reports. Photos upload to
 /// wwwroot/uploads/lostfound and are stored as root-relative
-/// paths, exactly like marketplace photos.
+/// paths, resolved against the API origin.
 /// </summary>
 [ApiController]
 [Route("api/lostfound/reports")]

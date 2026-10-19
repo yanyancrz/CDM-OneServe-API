@@ -12,5 +12,4 @@ public class StudentLoanDto
     public string Status { get; set; } = string.Empty;
     public bool IsOverdue { get; set; }
     public int OverdueDays { get; set; }
-    public decimal Fine { get; set; }
 }

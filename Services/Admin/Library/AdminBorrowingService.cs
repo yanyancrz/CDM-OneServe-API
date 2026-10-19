@@ -34,7 +34,7 @@ public class AdminBorrowingService : IAdminBorrowingService
     private sealed record Row(
         int BorrowId, int UserId, string? PatronName, string? PatronId, string? PatronType,
         int BookId, string? BookTitle, DateTime BorrowDate, DateTime DueDate,
-        DateTime? ReturnDate, decimal StoredFine);
+        DateTime? ReturnDate);
 
     private IQueryable<Row> Rows(IQueryable<BorrowTransaction> query) =>
         query.Select(t => new Row(
@@ -47,10 +47,8 @@ public class AdminBorrowingService : IAdminBorrowingService
             t.Book != null ? t.Book.Title : null,
             t.BorrowDate,
             t.DueDate,
-            t.ReturnDate,
-            t.Fine));
+            t.ReturnDate));
 
-    // The fine of an unreturned loan is computed here. A returned loan keeps its stored fine.
     private static BorrowListItemDto ToItem(Row r, DateTime now)
     {
         var active = r.ReturnDate == null;
@@ -70,8 +68,7 @@ public class AdminBorrowingService : IAdminBorrowingService
             DueDate = r.DueDate,
             ReturnDate = r.ReturnDate,
             Status = !active ? "Returned" : overdue ? "Overdue" : "Borrowed",
-            OverdueDays = days,
-            Fine = active ? days * LibraryDefaults.OverdueFinePerDay : r.StoredFine
+            OverdueDays = days
         };
     }
 
@@ -286,7 +283,6 @@ public class AdminBorrowingService : IAdminBorrowingService
             BorrowDate = now,
             DueDate = due,
             Status = "Borrowed",
-            Fine = 0,
             RenewalCount = 0,
             CreatedAt = now
         };
@@ -319,7 +315,6 @@ public class AdminBorrowingService : IAdminBorrowingService
             DueDate = due,
             LoanDays = dto.LoanDays,
             RemainingSlots = Math.Max(0, limit - (activeLoans + 1)),
-            FinePerDay = LibraryDefaults.OverdueFinePerDay,
             ProcessedBy = staffName
         }, 201);
     }
@@ -347,6 +342,9 @@ public class AdminBorrowingService : IAdminBorrowingService
 
         if (!allowed)
             return $"Account is not active (status: {(status.Length == 0 ? "unknown" : status)}).";
+
+        if (LibraryDefaults.IsBanned(user.BorrowBanUntil, DateTime.Now))
+            return $"Borrowing is suspended for this semester (until {user.BorrowBanUntil:MMM d, yyyy}).";
 
         if (activeLoans >= limit)
             return $"Borrowing limit reached ({activeLoans}/{limit} books).";
@@ -383,7 +381,8 @@ public class AdminBorrowingService : IAdminBorrowingService
             OverdueLoans = overdue,
             RemainingSlots = Math.Max(0, limit - active),
             CanBorrow = reason == null,
-            Reason = reason
+            Reason = reason,
+            BannedUntil = user.BorrowBanUntil
         };
     }
 

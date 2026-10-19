@@ -42,7 +42,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("admin_activity_logs", (string)null);
+                    b.ToTable("admin_activity_logs");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.AdminNotificationPreference", b =>
@@ -67,7 +67,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("admin_notification_preferences", (string)null);
+                    b.ToTable("admin_notification_preferences");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Announcement", b =>
@@ -108,7 +108,48 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Announcements", (string)null);
+                    b.ToTable("Announcements");
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.AssistantUsage", b =>
+                {
+                    b.Property<int>("UsageId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("UsageId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
+                    b.Property<bool?>("Helpful")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("LatencyMs")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("UsageId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("assistant_usages", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.EmailChangeRequest", b =>
@@ -135,7 +176,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("EmailChangeRequests", (string)null);
+                    b.ToTable("EmailChangeRequests");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceAppointment", b =>
@@ -431,6 +472,34 @@ namespace CDM_OneServe_API.Migrations
                     b.ToTable("guidance_counselor_profiles", (string)null);
                 });
 
+            modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceDayOff", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("CounselorId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("longtext");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CounselorId", "Date")
+                        .IsUnique();
+
+                    b.ToTable("guidance_day_offs", (string)null);
+                });
+
             modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceFollowUp", b =>
                 {
                     b.Property<int>("Id")
@@ -607,7 +676,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("BookId");
 
-                    b.ToTable("Books", (string)null);
+                    b.ToTable("Books");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.BorrowTransaction", b =>
@@ -629,13 +698,6 @@ namespace CDM_OneServe_API.Migrations
 
                     b.Property<DateTime>("DueDate")
                         .HasColumnType("datetime(6)");
-
-                    b.Property<decimal>("Fine")
-                        .HasColumnType("decimal(65,30)");
-
-                    b.Property<string>("FinePaymentStatus")
-                        .HasMaxLength(30)
-                        .HasColumnType("varchar(30)");
 
                     b.Property<string>("Remarks")
                         .HasColumnType("longtext");
@@ -664,7 +726,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("borrowtransactions", (string)null);
+                    b.ToTable("borrowtransactions");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibraryActivity", b =>
@@ -701,7 +763,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("LibraryActivities", (string)null);
+                    b.ToTable("LibraryActivities");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibraryAttendance", b =>
@@ -777,7 +839,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("NotificationId");
 
-                    b.ToTable("LibraryNotifications", (string)null);
+                    b.ToTable("LibraryNotifications");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibrarySettings", b =>
@@ -794,11 +856,20 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<int>("FacultyBorrowLimit")
                         .HasColumnType("int");
 
-                    b.Property<decimal>("OverdueFinePerDay")
-                        .HasColumnType("decimal(65,30)");
+                    b.Property<DateTime?>("FirstSemEnd")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("FirstSemStart")
+                        .HasColumnType("datetime(6)");
 
                     b.Property<int>("ReservationPickupDays")
                         .HasColumnType("int");
+
+                    b.Property<DateTime?>("SecondSemEnd")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("SecondSemStart")
+                        .HasColumnType("datetime(6)");
 
                     b.Property<int>("StudentBorrowLimit")
                         .HasColumnType("int");
@@ -811,7 +882,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("SettingId");
 
-                    b.ToTable("librarysettings", (string)null);
+                    b.ToTable("librarysettings");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.LibraryTerm", b =>
@@ -847,7 +918,7 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("TermId");
 
-                    b.ToTable("libraryterms", (string)null);
+                    b.ToTable("libraryterms");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.Reservation", b =>
@@ -886,156 +957,10 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("reservations", (string)null);
+                    b.ToTable("reservations");
                 });
 
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundClaim", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("ClaimDescription")
-                        .HasColumnType("longtext");
-
-                    b.Property<int>("ClaimantUserId")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime?>("ClaimedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("ItemId")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime?>("ReviewedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int?>("ReviewedBy")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("varchar(20)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ClaimantUserId");
-
-                    b.HasIndex("ItemId");
-
-                    b.HasIndex("ReviewedBy");
-
-                    b.ToTable("lost_found_claims", (string)null);
-                });
-
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundItem", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Category")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("varchar(100)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<DateTime>("DateLostFound")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("longtext");
-
-                    b.Property<string>("ItemName")
-                        .IsRequired()
-                        .HasMaxLength(150)
-                        .HasColumnType("varchar(150)");
-
-                    b.Property<string>("Location")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("varchar(255)");
-
-                    b.Property<string>("Photo")
-                        .HasMaxLength(500)
-                        .HasColumnType("varchar(500)");
-
-                    b.Property<string>("ReportType")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("varchar(10)");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("varchar(20)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("UserId")
-                        .HasColumnType("int");
-
-                    b.Property<string>("VerificationStatus")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("varchar(20)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("lost_found_items", (string)null);
-                });
-
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundMatch", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<int>("FoundItemId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("LostItemId")
-                        .HasColumnType("int");
-
-                    b.Property<decimal?>("MatchScore")
-                        .HasColumnType("decimal(65,30)");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("varchar(20)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("FoundItemId");
-
-                    b.HasIndex("LostItemId");
-
-                    b.ToTable("lost_found_matches", (string)null);
-                });
-
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundNotification", b =>
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.ClaimProofUpload", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -1046,46 +971,360 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<int?>("ClaimId")
                         .HasColumnType("int");
 
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<long>("FileSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("StoredPath")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<int>("UploadedByUserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StoredPath")
+                        .IsUnique();
+
+                    b.ToTable("ClaimProofUploads", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.ClaimRecord", b =>
+                {
+                    b.Property<int>("ClaimId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("ClaimId"));
+
+                    b.Property<DateTime>("ClaimDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("ClaimedByUserId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("DecisionAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("DecisionByUserId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("DecisionReason")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("IdentifyingDetails")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("NoProofReason")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("OwnershipExplanation")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ProofAttachmentPath")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ProofContentType")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ProofFileName")
+                        .HasColumnType("longtext");
+
+                    b.Property<long>("ProofFileSize")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("ReportId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("VerificationNotes")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.HasKey("ClaimId");
+
+                    b.HasIndex("ReportId");
+
+                    b.ToTable("ClaimRecords", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.ClaimSchedule", b =>
+                {
+                    b.Property<int>("ScheduleId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("ScheduleId"));
+
+                    b.Property<int>("ClaimId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ClaimantUserId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("PickupLocation")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ReceivedByName")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ReceivedByStudentId")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("ScheduledDateTime")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("StudentId")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime?>("VerifiedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("VerifiedByAdminId")
+                        .HasColumnType("int");
+
+                    b.HasKey("ScheduleId");
+
+                    b.HasIndex("ClaimId");
+
+                    b.ToTable("ClaimSchedules", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundReport", b =>
+                {
+                    b.Property<int>("ReportId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("ReportId"));
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("DateLostFound")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ImagePath")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ItemCustody")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ItemName")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Location")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ReportType")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("ReportId");
+
+                    b.ToTable("LostFoundReports", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.MatchRecord", b =>
+                {
+                    b.Property<int>("MatchRecordId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("MatchRecordId"));
+
+                    b.Property<int>("CategoryScore")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DateScore")
+                        .HasColumnType("int");
+
+                    b.Property<int>("FoundReportId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsConfirmed")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("LocationScore")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LostReportId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MatchPercentage")
+                        .HasColumnType("int");
+
+                    b.Property<int>("NameScore")
+                        .HasColumnType("int");
+
+                    b.HasKey("MatchRecordId");
+
+                    b.HasIndex("FoundReportId");
+
+                    b.HasIndex("LostReportId");
+
+                    b.ToTable("MatchRecords", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.Notification", b =>
+                {
+                    b.Property<int>("NotificationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("NotificationId"));
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
                     b.Property<bool>("IsRead")
                         .HasColumnType("tinyint(1)");
 
-                    b.Property<int?>("ItemId")
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("NotificationType")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int?>("ReportId")
                         .HasColumnType("int");
 
-                    b.Property<int?>("MatchId")
+                    b.Property<string>("TargetUrl")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("NotificationId");
+
+                    b.ToTable("LostFoundNotifications", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.PickupAvailability", b =>
+                {
+                    b.Property<int>("AvailabilityId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("AvailabilityId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EndDateTime")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime>("StartDateTime")
+                        .HasColumnType("datetime(6)");
+
+                    b.HasKey("AvailabilityId");
+
+                    b.ToTable("PickupAvailabilities", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.RecoveryRecord", b =>
+                {
+                    b.Property<int>("RecoveryId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("RecoveryId"));
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ContactInfo")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ContactMethod")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("FinderUserId")
                         .HasColumnType("int");
 
                     b.Property<string>("Message")
                         .IsRequired()
                         .HasColumnType("longtext");
 
-                    b.Property<string>("Title")
+                    b.Property<string>("RecoveryMethod")
                         .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("varchar(200)");
+                        .HasColumnType("longtext");
 
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("varchar(30)");
-
-                    b.Property<int>("UserId")
+                    b.Property<int>("ReportId")
                         .HasColumnType("int");
 
-                    b.HasKey("Id");
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("longtext");
 
-                    b.HasIndex("ClaimId");
+                    b.HasKey("RecoveryId");
 
-                    b.HasIndex("ItemId");
+                    b.HasIndex("ReportId");
 
-                    b.HasIndex("MatchId");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("lost_found_notifications", (string)null);
+                    b.ToTable("RecoveryRecords", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Notification", b =>
@@ -1120,6 +1359,183 @@ namespace CDM_OneServe_API.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("notifications", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Notifications.PushDeliveryLog", b =>
+                {
+                    b.Property<long>("PushDeliveryLogId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("PushDeliveryLogId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("longtext");
+
+                    b.Property<long>("PushOutboxId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("PushSubscriptionId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int?>("StatusCode")
+                        .HasColumnType("int");
+
+                    b.HasKey("PushDeliveryLogId");
+
+                    b.HasIndex("PushOutboxId");
+
+                    b.HasIndex("PushSubscriptionId", "CreatedAt");
+
+                    b.ToTable("PushDeliveryLogs", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Notifications.PushOutboxMessage", b =>
+                {
+                    b.Property<long>("PushOutboxId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("PushOutboxId"));
+
+                    b.Property<byte>("Attempts")
+                        .HasColumnType("tinyint unsigned");
+
+                    b.Property<string>("BadgeUrl")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DedupeKey")
+                        .IsRequired()
+                        .HasMaxLength(190)
+                        .HasColumnType("varchar(190)");
+
+                    b.Property<string>("IconUrl")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Module")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<byte>("Priority")
+                        .HasColumnType("tinyint unsigned");
+
+                    b.Property<DateTime?>("ProcessedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("PushSubscriptionId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ScheduledAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<string>("Tag")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("TargetUrl")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("PushOutboxId");
+
+                    b.HasIndex("DedupeKey")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("Status", "ScheduledAt", "PushOutboxId");
+
+                    b.ToTable("PushOutbox", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Notifications.PushSubscription", b =>
+                {
+                    b.Property<int>("PushSubscriptionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("PushSubscriptionId"));
+
+                    b.Property<string>("Auth")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("DeactivatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DeviceLabel")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("Endpoint")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime>("LastUsedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("P256dh")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<string>("UserAgent")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("PushSubscriptionId");
+
+                    b.HasIndex("Endpoint")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "IsActive");
+
+                    b.ToTable("PushSubscriptions", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.OTPVerification", b =>
@@ -1162,7 +1578,39 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("OTPVerifications", (string)null);
+                    b.ToTable("OTPVerifications");
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.SchoolRecord", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("IdNumber")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<bool>("IsUsed")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IdNumber")
+                        .IsUnique();
+
+                    b.ToTable("school_records", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.User", b =>
@@ -1179,6 +1627,9 @@ namespace CDM_OneServe_API.Migrations
 
                     b.Property<string>("AdminModule")
                         .HasColumnType("longtext");
+
+                    b.Property<DateTime?>("BorrowBanUntil")
+                        .HasColumnType("datetime(6)");
 
                     b.Property<string>("ContactNumber")
                         .HasColumnType("longtext");
@@ -1240,12 +1691,15 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<string>("StudentStatus")
                         .HasColumnType("longtext");
 
+                    b.Property<DateTime?>("TokensValidFrom")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<string>("YearLevel")
                         .HasColumnType("longtext");
 
                     b.HasKey("Id");
 
-                    b.ToTable("Users", (string)null);
+                    b.ToTable("Users");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.UserActivity", b =>
@@ -1274,6 +1728,44 @@ namespace CDM_OneServe_API.Migrations
                     b.ToTable("user_activities", (string)null);
                 });
 
+            modelBuilder.Entity("CDM_OneServe_API.Models.UserSession", b =>
+                {
+                    b.Property<int>("UserSessionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("UserSessionId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DeviceLabel")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("longtext");
+
+                    b.Property<bool>("IsRevoked")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime>("LastSeenAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("SessionKey")
+                        .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("UserAgent")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("int");
+
+                    b.HasKey("UserSessionId");
+
+                    b.ToTable("UserSessions");
+                });
+
             modelBuilder.Entity("PasswordResetOTP", b =>
                 {
                     b.Property<int>("Id")
@@ -1295,7 +1787,18 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("PasswordResetOTPs", (string)null);
+                    b.ToTable("PasswordResetOTPs");
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.AssistantUsage", b =>
+                {
+                    b.HasOne("CDM_OneServe_API.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceAppointment", b =>
@@ -1421,6 +1924,17 @@ namespace CDM_OneServe_API.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceDayOff", b =>
+                {
+                    b.HasOne("CDM_OneServe_API.Models.User", "Counselor")
+                        .WithMany()
+                        .HasForeignKey("CounselorId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Counselor");
+                });
+
             modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceFollowUp", b =>
                 {
                     b.HasOne("CDM_OneServe_API.Models.User", "Counselor")
@@ -1502,92 +2016,56 @@ namespace CDM_OneServe_API.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundClaim", b =>
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.ClaimRecord", b =>
                 {
-                    b.HasOne("CDM_OneServe_API.Models.User", "ClaimantUser")
+                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundReport", "Report")
                         .WithMany()
-                        .HasForeignKey("ClaimantUserId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .HasForeignKey("ReportId")
+                        .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
 
-                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundItem", "Item")
-                        .WithMany()
-                        .HasForeignKey("ItemId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("CDM_OneServe_API.Models.User", "Reviewer")
-                        .WithMany()
-                        .HasForeignKey("ReviewedBy")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("ClaimantUser");
-
-                    b.Navigation("Item");
-
-                    b.Navigation("Reviewer");
+                    b.Navigation("Report");
                 });
 
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundItem", b =>
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.ClaimSchedule", b =>
                 {
-                    b.HasOne("CDM_OneServe_API.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundMatch", b =>
-                {
-                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundItem", "FoundItem")
-                        .WithMany()
-                        .HasForeignKey("FoundItemId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundItem", "LostItem")
-                        .WithMany()
-                        .HasForeignKey("LostItemId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("FoundItem");
-
-                    b.Navigation("LostItem");
-                });
-
-            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundNotification", b =>
-                {
-                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundClaim", "Claim")
+                    b.HasOne("CDM_OneServe_API.Models.LostFound.ClaimRecord", "Claim")
                         .WithMany()
                         .HasForeignKey("ClaimId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundItem", "Item")
-                        .WithMany()
-                        .HasForeignKey("ItemId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundMatch", "Match")
-                        .WithMany()
-                        .HasForeignKey("MatchId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("CDM_OneServe_API.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
 
                     b.Navigation("Claim");
+                });
 
-                    b.Navigation("Item");
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.MatchRecord", b =>
+                {
+                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundReport", "FoundReport")
+                        .WithMany()
+                        .HasForeignKey("FoundReportId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
 
-                    b.Navigation("Match");
+                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundReport", "LostReport")
+                        .WithMany()
+                        .HasForeignKey("LostReportId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
 
-                    b.Navigation("User");
+                    b.Navigation("FoundReport");
+
+                    b.Navigation("LostReport");
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.RecoveryRecord", b =>
+                {
+                    b.HasOne("CDM_OneServe_API.Models.LostFound.LostFoundReport", "Report")
+                        .WithMany()
+                        .HasForeignKey("ReportId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Report");
                 });
 #pragma warning restore 612, 618
         }

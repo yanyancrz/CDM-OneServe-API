@@ -20,6 +20,9 @@ public static class PatronRules
         if (!allowed)
             return $"Account is not active (status: {(status.Length == 0 ? "unknown" : status)}).";
 
+        if (LibraryDefaults.IsBanned(user.BorrowBanUntil, DateTime.Now))
+            return $"Borrowing is suspended for this semester (until {user.BorrowBanUntil:MMM d, yyyy}).";
+
         if (activeLoans >= limit)
             return $"Borrowing limit reached ({activeLoans}/{limit} books).";
 
