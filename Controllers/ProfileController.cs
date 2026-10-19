@@ -316,7 +316,10 @@ public class ProfileController : ControllerBase
 
             // Account status
             user.AccountStatus,
-            user.PhysicalIdVerificationStatus
+            user.PhysicalIdVerificationStatus,
+
+            // Still on the password we generated and emailed at registration.
+            user.MustChangePassword
         });
     }
 
@@ -842,6 +845,9 @@ public class ProfileController : ControllerBase
                 request.NewPassword
             );
 
+        // By choosing a new password the user is off the one we mailed.
+        user.MustChangePassword = false;
+
 
         // =====================================================
         // ACTIVITY LOG
@@ -876,5 +882,209 @@ public class ProfileController : ControllerBase
             message =
                 "Password changed successfully."
         });
+    }
+
+
+    // =========================================================
+    // CHANGE PASSWORD VIA EMAIL OTP
+    // POST: /api/profile/password-otp/request
+    //       /api/profile/password-otp/confirm
+    //
+    // The student number + account email identify the account and
+    // the code is mailed to that address, so a user who is signed
+    // in can still prove the mailbox is theirs before the password
+    // changes. Mirrors the forgot-password OTP table.
+    // =========================================================
+
+    [HttpPost("password-otp/request")]
+    public async Task<IActionResult> RequestPasswordOtp(
+        ProfilePasswordOtpRequest request)
+    {
+        var email =
+            request.Email?.Trim().ToLowerInvariant() ?? "";
+
+        var normalizedId =
+            NormalizeIdNumber(request.IdNumber);
+
+        if (string.IsNullOrEmpty(normalizedId) ||
+            string.IsNullOrEmpty(email))
+        {
+            return BadRequest(new
+            {
+                message =
+                    "Please enter your student number and account email."
+            });
+        }
+
+        var user =
+            _context.Users.FirstOrDefault(x =>
+                x.Email.ToLower() == email &&
+                x.AccountStatus != "Deleted");
+
+        if (user == null ||
+            NormalizeIdNumber(user.IdNumber) != normalizedId)
+        {
+            return BadRequest(new
+            {
+                message =
+                    "We couldn't find an account with that student number and email."
+            });
+        }
+
+        var otpCode =
+            Random.Shared
+                .Next(100000, 999999)
+                .ToString();
+
+        var existing =
+            _context.PasswordResetOTPs
+                .FirstOrDefault(x => x.Email == user.Email);
+
+        if (existing != null)
+        {
+            _context.PasswordResetOTPs.Remove(existing);
+        }
+
+        _context.PasswordResetOTPs.Add(new PasswordResetOTP
+        {
+            Email = user.Email,
+            OTPCode = otpCode,
+            ExpiryDate = DateTime.Now.AddMinutes(5)
+        });
+
+        await _context.SaveChangesAsync();
+
+        await _emailService.SendOtpAsync(
+            user.Email,
+            otpCode,
+            "forgotpassword");
+
+        return Ok(new
+        {
+            message =
+                "A one-time code was sent to your email."
+        });
+    }
+
+
+    [HttpPost("password-otp/confirm")]
+    public async Task<IActionResult> ConfirmPasswordOtp(
+        ProfilePasswordOtpConfirmRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.NewPassword) ||
+            request.NewPassword.Length < 8)
+        {
+            return BadRequest(new
+            {
+                message =
+                    "New password must be at least 8 characters."
+            });
+        }
+
+        var email =
+            request.Email?.Trim().ToLowerInvariant() ?? "";
+
+        var normalizedId =
+            NormalizeIdNumber(request.IdNumber);
+
+        var user =
+            _context.Users.FirstOrDefault(x =>
+                x.Email.ToLower() == email &&
+                x.AccountStatus != "Deleted");
+
+        if (user == null ||
+            NormalizeIdNumber(user.IdNumber) != normalizedId)
+        {
+            return BadRequest(new
+            {
+                message =
+                    "We couldn't find an account with that student number and email."
+            });
+        }
+
+        var otpRecord =
+            _context.PasswordResetOTPs
+                .FirstOrDefault(x =>
+                    x.Email == user.Email &&
+                    x.OTPCode == request.OtpCode);
+
+        if (otpRecord == null)
+        {
+            return BadRequest(new
+            {
+                message = "Invalid OTP."
+            });
+        }
+
+        if (otpRecord.ExpiryDate < DateTime.Now)
+        {
+            return BadRequest(new
+            {
+                message =
+                    "OTP expired. Please request a new one."
+            });
+        }
+
+        if (
+            BCrypt.Net.BCrypt.Verify(
+                request.NewPassword,
+                user.PasswordHash
+            )
+        )
+        {
+            return BadRequest(new
+            {
+                message =
+                    "New password cannot be the same as your current password."
+            });
+        }
+
+        user.PasswordHash =
+            BCrypt.Net.BCrypt.HashPassword(
+                request.NewPassword
+            );
+
+        // Off the password we mailed at registration.
+        user.MustChangePassword = false;
+
+        _context.PasswordResetOTPs.Remove(otpRecord);
+
+        _context.UserActivities.Add(new UserActivity
+        {
+            UserId = user.Id,
+            Action = "Changed password",
+            Description = "You changed your account password.",
+            CreatedAt = DateTime.Now
+        });
+
+        LogAdmin(
+            user.Id,
+            user.Role,
+            $"{user.FullName} changed their password");
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message =
+                "Password changed successfully."
+        });
+    }
+
+
+    // =========================================================
+    // HELPER — ID NUMBER NORMALIZER
+    // Same rule as AuthController: trim, drop spaces, upper-case.
+    // =========================================================
+
+    private static string NormalizeIdNumber(string? idNumber)
+    {
+        if (string.IsNullOrWhiteSpace(idNumber))
+            return "";
+
+        return idNumber
+            .Trim()
+            .Replace(" ", "")
+            .ToUpperInvariant();
     }
 }

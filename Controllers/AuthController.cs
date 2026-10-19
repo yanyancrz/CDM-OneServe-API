@@ -286,6 +286,7 @@ public class AuthController : ControllerBase
             Role = role,
             IsVerified = true,
             IsProfileComplete = false,
+            MustChangePassword = true,
             PhysicalIdDocument = null,
             PhysicalIdVerificationStatus = "Verified",
             PhysicalIdVerifiedAt = DateTime.Now,
@@ -717,6 +718,8 @@ public class AuthController : ControllerBase
                 user.AccountStatus,
                 user.PhysicalIdVerificationStatus,
 
+                user.MustChangePassword,
+
                 requiresSetupProfile = !user.IsProfileComplete
             }
         });
@@ -912,6 +915,9 @@ public class AuthController : ControllerBase
         }
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+
+        // The user chose this password, so it is no longer the one we mailed.
+        user.MustChangePassword = false;
 
         _context.UserActivities.Add(new UserActivity
         {

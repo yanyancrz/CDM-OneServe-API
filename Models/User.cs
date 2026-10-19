@@ -26,6 +26,11 @@ public class User
 
     public bool IsProfileComplete { get; set; }
 
+    // True while the account still uses the password we generated and
+    // emailed at registration. The dashboard nudges the user to change it,
+    // and any password change (Profile or OTP flow) clears it.
+    public bool MustChangePassword { get; set; }
+
     public DateTime CreatedAt { get; set; }
         = DateTime.Now;
 

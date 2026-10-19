@@ -1661,6 +1661,9 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<bool>("IsVerified")
                         .HasColumnType("tinyint(1)");
 
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasColumnType("longtext");
