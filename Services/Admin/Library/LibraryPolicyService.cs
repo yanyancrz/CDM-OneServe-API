@@ -13,11 +13,16 @@ public class LibraryPolicyService : ILibraryPolicyService
 {
     private readonly AppDbContext _db;
     private readonly IHttpContextAccessor _http;
+    private readonly IAdminTermsService _terms;
 
-    public LibraryPolicyService(AppDbContext db, IHttpContextAccessor http)
+    public LibraryPolicyService(
+        AppDbContext db,
+        IHttpContextAccessor http,
+        IAdminTermsService terms)
     {
         _db = db;
         _http = http;
+        _terms = terms;
     }
 
     public async Task<LibraryPolicyDto> GetPolicyAsync(CancellationToken cancellationToken)
@@ -39,9 +44,16 @@ public class LibraryPolicyService : ILibraryPolicyService
                 LoanDayOptions = LibraryDefaults.LoanDayOptions
             },
 
-            // The Terms & Guidelines are added in the next step,
-            // once the LibraryTerm model is available.
-            Terms = new List<LibraryPolicyTermDto>()
+            // The Terms & Guidelines written by the Library Head. GetAsync
+            // seeds the defaults on an empty table and then returns them.
+            Terms = (await _terms.GetAsync(cancellationToken))
+                .Select(t => new LibraryPolicyTermDto
+                {
+                    Id = t.TermId,
+                    Title = t.Title,
+                    Content = t.Content
+                })
+                .ToList()
         };
 
         // The signed-in patron's own borrowing suspension, so the app can show

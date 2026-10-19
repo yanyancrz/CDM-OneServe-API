@@ -33,20 +33,26 @@ public class AdminTermsService : IAdminTermsService
         ("renewal-policies", "Renewal Policies",
             "A book may be renewed if no other patron has reserved it and it is not overdue. Ask the librarian at the counter."),
         ("overdue-penalty", "Overdue Penalty",
-            "Returning a book after its due date suspends borrowing for the rest of the semester. " +
-            "A lost book must be replaced with an exact copy of the same title."),
+            "There are no cash fines. Returning a book after its due date immediately suspends the borrower " +
+            "from borrowing for the rest of the current semester. Borrowing is allowed again starting the next semester."),
         ("lost-book-policy", "Lost Book Policy",
-            "A lost book must be reported to the library right away. The borrower is responsible for replacing it with an exact copy of the same title."),
+            "A lost book must be reported to the library right away. The borrower must replace it with an exact " +
+            "copy of the same book - same ISBN and edition. Cash payment is not accepted in place of the replacement."),
         ("damaged-book-policy", "Damaged Book Policy",
-            "Books must be returned in the condition they were borrowed. Damaged books are assessed by the librarian."),
+            "Books must be returned in the condition they were borrowed. A damaged book is assessed by the " +
+            "librarian; if it can no longer be used, the borrower must replace it with an exact copy of the same " +
+            "book - same ISBN and edition."),
         ("library-hours", "Library Hours",
             "Monday to Friday, 8:00 AM to 5:00 PM. The library is closed on weekends and holidays."),
         ("ebook-rules", "eBook Rules",
-            "eBooks are for reading inside CDM OneServe only. Copying, sharing, or redistributing them is not allowed.")
+            "eBooks are for reading inside CDM OneServe only. Copying, sharing, or redistributing them is not allowed."),
+        ("collection-scope", "Collection Scope",
+            "The library lends only ITE, IBE, and ICS subject-related books.")
     };
 
     private static LibraryTermDto ToDto(LibraryTerm t) => new()
     {
+        TermId = t.TermId,
         TermKey = t.TermKey,
         Title = t.Title,
         Content = t.Content,
