@@ -38,10 +38,10 @@ SET @gh_hash     = '$2b$10$RLN9XK5meTHqBbms29KUBuQNSjytHZQ5eWjNQCm1Aaf214ZhjA05m
 
 INSERT INTO `users`
     (`IdNumber`, `FullName`, `Email`, `PasswordHash`, `IsVerified`, `IsProfileComplete`,
-     `Role`, `AdminModule`, `AccountStatus`, `PhysicalIdVerificationStatus`, `CreatedAt`)
+     `Role`, `AdminModule`, `AccountStatus`, `CreatedAt`)
 SELECT
     @gh_idnumber, @gh_name, @gh_email, @gh_hash, 1, 1,
-    'GuidanceAdmin', 'Guidance', 'Active', 'Pending', NOW()
+    'GuidanceAdmin', 'Guidance', 'Active', NOW()
 WHERE NOT EXISTS (
     SELECT 1 FROM `users` WHERE `Email` = @gh_email OR `IdNumber` = @gh_idnumber
 );

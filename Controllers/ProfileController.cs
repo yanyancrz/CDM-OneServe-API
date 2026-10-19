@@ -316,7 +316,6 @@ public class ProfileController : ControllerBase
 
             // Account status
             user.AccountStatus,
-            user.PhysicalIdVerificationStatus,
 
             // Still on the password we generated and emailed at registration.
             user.MustChangePassword

@@ -35,29 +35,6 @@ public class AdminDashboardController : ControllerBase
             var totalUsers = await usersQuery.CountAsync();
 
             // -----------------------------------------
-            // PENDING PHYSICAL ID
-            // -----------------------------------------
-            var pendingPhysicalId = await usersQuery.CountAsync(u =>
-                u.PhysicalIdVerificationStatus == "Pending" ||
-                u.PhysicalIdVerificationStatus == "Submitted" ||
-                u.AccountStatus == "Pending"
-            );
-
-            // -----------------------------------------
-            // VERIFIED PHYSICAL ID
-            // -----------------------------------------
-            var verifiedPhysicalId = await usersQuery.CountAsync(u =>
-                u.PhysicalIdVerificationStatus == "Verified"
-            );
-
-            // -----------------------------------------
-            // REJECTED PHYSICAL ID
-            // -----------------------------------------
-            var rejectedPhysicalId = await usersQuery.CountAsync(u =>
-                u.PhysicalIdVerificationStatus == "Rejected"
-            );
-
-            // -----------------------------------------
             // RECENT ACTIVITY
             // Lahat ng ginawa ng lahat ng admin (AdminActivityLogs),
             // pinakabago muna.
@@ -118,9 +95,6 @@ public class AdminDashboardController : ControllerBase
             return Ok(new
             {
                 totalUsers,
-                pendingPhysicalId,
-                verifiedPhysicalId,
-                rejectedPhysicalId,
                 recentActivity,
                 modules
             });

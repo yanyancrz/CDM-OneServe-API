@@ -56,16 +56,6 @@ public class User
 
     public string? Position { get; set; }
 
-    // Physical ID Supporting Document
-    public string? PhysicalIdDocument { get; set; }
-
-    public string PhysicalIdVerificationStatus { get; set; }
-        = "Pending";
-
-    public DateTime? PhysicalIdVerifiedAt { get; set; }
-
-    public int? PhysicalIdReviewedBy { get; set; }
-
     // Registration Verification Status
     public string AccountStatus { get; set; }
         = "Pending";

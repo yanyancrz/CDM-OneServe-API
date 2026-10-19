@@ -26,7 +26,6 @@
 
   <ItemGroup>
     <Folder Include="wwwroot\uploads\lostfound\" />
-    <Folder Include="wwwroot\uploads\physical-id\" />
     <Folder Include="wwwroot\uploads\profile\" />
   </ItemGroup>
 

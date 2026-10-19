@@ -1569,9 +1569,6 @@ namespace CDM_OneServe_API.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
-                    b.Property<string>("PhysicalIdDocument")
-                        .HasColumnType("longtext");
-
                     b.Property<string>("Role")
                         .IsRequired()
                         .HasColumnType("longtext");
@@ -1667,19 +1664,6 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasColumnType("longtext");
-
-                    b.Property<string>("PhysicalIdDocument")
-                        .HasColumnType("longtext");
-
-                    b.Property<int?>("PhysicalIdReviewedBy")
-                        .HasColumnType("int");
-
-                    b.Property<string>("PhysicalIdVerificationStatus")
-                        .IsRequired()
-                        .HasColumnType("longtext");
-
-                    b.Property<DateTime?>("PhysicalIdVerifiedAt")
-                        .HasColumnType("datetime(6)");
 
                     b.Property<string>("Position")
                         .HasColumnType("longtext");

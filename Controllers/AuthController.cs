@@ -120,8 +120,8 @@ public class AuthController : ControllerBase
     // =========================================================
     // PNM SCHOOL EMAIL DOMAINS
     // A school email already proves the person belongs to the
-    // school, so registration with one skips the physical ID
-    // upload and activates the account right after OTP.
+    // school, so registration with one activates the account
+    // right after OTP.
     // Returns the account type the domain belongs to, or null
     // when the email is not a school email.
     // =========================================================
@@ -186,8 +186,8 @@ public class AuthController : ControllerBase
         }
 
         // =====================================================
-        // NEW FLOW: ID Number + Email only (no physical ID,
-        // no names, no password from the user).
+        // NEW FLOW: ID Number + Email only (no names,
+        // no password from the user).
         // The ID must exist in the official School Records —
         // IDs live ONLY in the database, never in code.
         // =====================================================
@@ -287,10 +287,6 @@ public class AuthController : ControllerBase
             IsVerified = true,
             IsProfileComplete = false,
             MustChangePassword = true,
-            PhysicalIdDocument = null,
-            PhysicalIdVerificationStatus = "Verified",
-            PhysicalIdVerifiedAt = DateTime.Now,
-            PhysicalIdReviewedBy = null,
             AccountStatus = "Active"
         };
 
@@ -447,12 +443,6 @@ public class AuthController : ControllerBase
             existingUser.Role = otpRecord.Role;
             existingUser.IsVerified = true;
             existingUser.IsProfileComplete = false;
-            existingUser.PhysicalIdDocument = otpRecord.PhysicalIdDocument;
-            existingUser.PhysicalIdVerificationStatus =
-                schoolAutoVerify ? "Verified" : "Pending";
-            existingUser.PhysicalIdVerifiedAt =
-                schoolAutoVerify ? DateTime.Now : null;
-            existingUser.PhysicalIdReviewedBy = null;
             existingUser.AccountStatus =
                 schoolAutoVerify ? "Active" : "Pending";
 
@@ -466,8 +456,6 @@ public class AuthController : ControllerBase
                     : "Registration submitted successfully. Your account is pending admin verification.",
                 userId = existingUser.Id,
                 accountStatus = existingUser.AccountStatus,
-                physicalIdVerificationStatus =
-                    existingUser.PhysicalIdVerificationStatus,
                 requiresSetupProfile = true
             });
         }
@@ -490,12 +478,6 @@ public class AuthController : ControllerBase
             Role = otpRecord.Role,
             IsVerified = true,
             IsProfileComplete = false,
-            PhysicalIdDocument = otpRecord.PhysicalIdDocument,
-            PhysicalIdVerificationStatus =
-                autoVerify ? "Verified" : "Pending",
-            PhysicalIdVerifiedAt =
-                autoVerify ? DateTime.Now : null,
-            PhysicalIdReviewedBy = null,
             AccountStatus = autoVerify ? "Active" : "Pending"
         };
 
@@ -511,7 +493,6 @@ public class AuthController : ControllerBase
                 : "Registration submitted successfully. Your account is pending admin verification.",
             userId = user.Id,
             accountStatus = user.AccountStatus,
-            physicalIdVerificationStatus = user.PhysicalIdVerificationStatus,
             requiresSetupProfile = true
         });
     }
@@ -716,7 +697,6 @@ public class AuthController : ControllerBase
                 user.IsProfileComplete,
 
                 user.AccountStatus,
-                user.PhysicalIdVerificationStatus,
 
                 user.MustChangePassword,
 
@@ -940,11 +920,6 @@ public class AuthController : ControllerBase
     //
     // POST /api/auth/members
     // Only SuperAdmin or Admin.
-    //
-    // If request.IdVerified is true:
-    //   - PhysicalIdVerificationStatus = "Verified"
-    //   - PhysicalIdVerifiedAt / PhysicalIdReviewedBy are set
-    //   - an AdminActivityLog entry is written
     // =========================================================
 
     [Authorize(Roles = "SuperAdmin,Admin")]
@@ -1028,14 +1003,6 @@ public class AuthController : ControllerBase
             });
         }
 
-        // ---------------- VERIFICATION VALUES ----------------
-
-        var adminId = GetCurrentUserId();
-
-        var verificationStatus = request.IdVerified ? "Verified" : null;
-        var verifiedAt = request.IdVerified ? DateTime.Now : (DateTime?)null;
-        var reviewedBy = request.IdVerified ? adminId : null;
-
         // =====================================================
         // REACTIVATE DELETED ACCOUNT
         // =====================================================
@@ -1060,14 +1027,8 @@ public class AuthController : ControllerBase
             existingUser.IsProfileComplete = true;
             existingUser.AccountStatus = "Active";
 
-            existingUser.PhysicalIdVerificationStatus = verificationStatus;
-            existingUser.PhysicalIdDocument = null;
-            existingUser.PhysicalIdVerifiedAt = verifiedAt;
-            existingUser.PhysicalIdReviewedBy = reviewedBy;
-
             LogAdmin(
-                $"Restored {role} account for {fullName} ({existingUser.IdNumber})" +
-                (request.IdVerified ? " — ID verified" : ""));
+                $"Restored {role} account for {fullName} ({existingUser.IdNumber})");
 
             await _context.SaveChangesAsync();
 
@@ -1087,7 +1048,6 @@ public class AuthController : ControllerBase
                     existingUser.Course,
                     existingUser.YearLevel,
                     existingUser.ContactNumber,
-                    existingUser.PhysicalIdVerificationStatus,
 
                     Status = existingUser.AccountStatus,
 
@@ -1114,18 +1074,13 @@ public class AuthController : ControllerBase
             ContactNumber = request.ContactNumber,
             IsVerified = true,
             IsProfileComplete = true,
-            AccountStatus = "Active",
-
-            PhysicalIdVerificationStatus = verificationStatus,
-            PhysicalIdVerifiedAt = verifiedAt,
-            PhysicalIdReviewedBy = reviewedBy
+            AccountStatus = "Active"
         };
 
         _context.Users.Add(user);
 
         LogAdmin(
-            $"Created {role} account for {fullName} ({user.IdNumber})" +
-            (request.IdVerified ? " — ID verified" : ""));
+            $"Created {role} account for {fullName} ({user.IdNumber})");
 
         await _context.SaveChangesAsync();
 
@@ -1145,7 +1100,6 @@ public class AuthController : ControllerBase
                 user.Course,
                 user.YearLevel,
                 user.ContactNumber,
-                user.PhysicalIdVerificationStatus,
 
                 Status = user.AccountStatus,
 
@@ -1345,9 +1299,6 @@ public class AuthController : ControllerBase
                 x.YearLevel,
 
                 Status = x.AccountStatus,
-
-                x.PhysicalIdVerificationStatus,
-                x.PhysicalIdDocument,
 
                 LastActive = x.CreatedAt
             })
@@ -1551,9 +1502,7 @@ public class AuthController : ControllerBase
                 user.Course,
                 user.YearLevel,
 
-                Status = user.AccountStatus,
-
-                user.PhysicalIdVerificationStatus
+                Status = user.AccountStatus
             }
         });
     }
@@ -1656,101 +1605,6 @@ public class AuthController : ControllerBase
     }
 
     // =========================================================
-    // UPLOAD PHYSICAL ID
-    // =========================================================
-
-    [HttpPost("upload-physical-id")]
-    [RequestSizeLimit(5 * 1024 * 1024)]
-    public async Task<IActionResult> UploadPhysicalId(
-        IFormFile file)
-    {
-        const long maxFileSize = 5 * 1024 * 1024;
-
-        string[] allowedExtensions =
-        {
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".webp"
-        };
-
-        if (file == null || file.Length == 0)
-        {
-            return BadRequest(new
-            {
-                message = "Please select a physical ID image."
-            });
-        }
-
-        if (file.Length > maxFileSize)
-        {
-            return BadRequest(new
-            {
-                message = "Physical ID image must be 5 MB or smaller."
-            });
-        }
-
-        if (string.IsNullOrWhiteSpace(file.ContentType) ||
-            !file.ContentType.StartsWith(
-                "image/",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return BadRequest(new
-            {
-                message = "Only image files are allowed."
-            });
-        }
-
-        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
-
-        if (!allowedExtensions.Contains(extension))
-        {
-            return BadRequest(new
-            {
-                message = "Allowed formats: JPG, JPEG, PNG, and WEBP."
-            });
-        }
-
-        var webRootPath = _environment.WebRootPath;
-
-        if (string.IsNullOrWhiteSpace(webRootPath))
-        {
-            webRootPath = Path.Combine(
-                Directory.GetCurrentDirectory(),
-                "wwwroot"
-            );
-        }
-
-        var uploadFolder = Path.Combine(
-            webRootPath,
-            "uploads",
-            "physical-id"
-        );
-
-        Directory.CreateDirectory(uploadFolder);
-
-        var fileName = $"{Guid.NewGuid():N}{extension}";
-
-        var filePath = Path.Combine(uploadFolder, fileName);
-
-        await using var stream = new FileStream(
-            filePath,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None
-        );
-
-        await file.CopyToAsync(stream);
-
-        var documentPath = $"/uploads/physical-id/{fileName}";
-
-        return Ok(new
-        {
-            physicalIdDocument = documentPath
-        });
-    }
-
-    // =========================================================
     // DELETE USER ACCOUNT — SOFT DELETE
     // =========================================================
     //
@@ -1792,9 +1646,6 @@ public class AuthController : ControllerBase
 
         user.AccountStatus = "Deleted";
         user.IsVerified = false;
-        user.PhysicalIdVerificationStatus = "Pending";
-        user.PhysicalIdVerifiedAt = null;
-        user.PhysicalIdReviewedBy = null;
 
         LogAdmin($"Deleted account of {user.FullName} ({user.IdNumber ?? user.Email})");
 
@@ -1834,9 +1685,6 @@ public class AddMemberRequest
     public string? YearLevel { get; set; }
 
     public string? ContactNumber { get; set; }
-
-    // true = admin confirmed the ID was presented / student is enrolled
-    public bool IdVerified { get; set; }
 }
 
 // =============================================================

@@ -8,8 +8,8 @@ public class RegisterRequest
     // password (login credentials) is generated server-side
     // and emailed to the user.
     //
-    // FirstName / MiddleName / LastName / Password /
-    // PhysicalIdDocument stay optional so older app versions
+    // FirstName / MiddleName / LastName / Password
+    // stay optional so older app versions
     // still deserialize — the new Register endpoint ignores them.
     // =========================================================
 
@@ -24,8 +24,6 @@ public class RegisterRequest
     public string Email { get; set; } = "";
 
     public string Password { get; set; } = "";
-
-    public string? PhysicalIdDocument { get; set; }
 
     public string Role { get; set; } = "Student";
 }

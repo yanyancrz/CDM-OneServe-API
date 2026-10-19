@@ -16,7 +16,7 @@ appsettings.Local.json
 secrets.json
 *.pfx
 
-# Uploaded files (physical IDs, etc.)
+# Uploaded files
 wwwroot/uploads/
 
 # Claim proof-of-ownership files (staged + attached). Runtime data:
