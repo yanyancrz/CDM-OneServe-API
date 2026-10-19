@@ -107,6 +107,11 @@ public class AppDbContext : DbContext
 
     public DbSet<Announcement> Announcements { get; set; } = null!;
 
+    // EVENTS
+    // =========================
+
+    public DbSet<Event> Events { get; set; } = null!;
+
     // LOST & FOUND (ported from the standalone FIND system)
     // Uses the existing `users` table for authorship; no FIND users table.
     // =========================
