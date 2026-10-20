@@ -527,11 +527,105 @@ public class GuidanceCounselorService
     // ------------------------------------------------------------------
     // AVAILABILITY (the counselor's own weekly schedule)
     // ------------------------------------------------------------------
-    public async Task<List<AvailabilityBlockDto>> GetAvailabilityAsync(int counselorId, CancellationToken ct) =>
-        (await _context.GuidanceAvailabilities.AsNoTracking()
+    public async Task<List<AvailabilityBlockDto>> GetAvailabilityAsync(int counselorId, CancellationToken ct)
+    {
+        // Auto-seed default schedule for counselors who have never set one up.
+        // The "AvailabilitySeeded" flag ensures we don't re-seed after the
+        // counselor intentionally deletes all blocks.
+        var profile = await _context.GuidanceCounselorProfiles
+            .FirstOrDefaultAsync(p => p.UserId == counselorId, ct);
+
+        if (profile != null && !profile.AvailabilitySeeded)
+        {
+            var existingCount = await _context.GuidanceAvailabilities
+                .CountAsync(a => a.CounselorId == counselorId, ct);
+
+            if (existingCount == 0)
+            {
+                // Seed default: Mon-Fri, 8:00-12:00 and 13:00-17:00
+                var defaults = new List<GuidanceAvailability>();
+                for (int day = 1; day <= 5; day++)
+                {
+                    defaults.Add(new GuidanceAvailability
+                    {
+                        CounselorId = counselorId,
+                        DayOfWeek = day,
+                        StartTime = new TimeSpan(8, 0, 0),
+                        EndTime = new TimeSpan(12, 0, 0),
+                        IsActive = true
+                    });
+                    defaults.Add(new GuidanceAvailability
+                    {
+                        CounselorId = counselorId,
+                        DayOfWeek = day,
+                        StartTime = new TimeSpan(13, 0, 0),
+                        EndTime = new TimeSpan(17, 0, 0),
+                        IsActive = true
+                    });
+                }
+
+                _context.GuidanceAvailabilities.AddRange(defaults);
+                profile.AvailabilitySeeded = true;
+                profile.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(ct);
+            }
+            else
+            {
+                // Has blocks but not seeded flag - mark as seeded
+                profile.AvailabilitySeeded = true;
+                profile.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync(ct);
+            }
+        }
+
+        return (await _context.GuidanceAvailabilities.AsNoTracking()
             .Where(a => a.CounselorId == counselorId)
             .OrderBy(a => a.DayOfWeek).ThenBy(a => a.StartTime)
             .ToListAsync(ct)).Select(ToDto).ToList();
+    }
+
+    public async Task<GuidanceResult<object>> ResetToDefaultAsync(int counselorId, CancellationToken ct)
+    {
+        var existing = await _context.GuidanceAvailabilities
+            .Where(a => a.CounselorId == counselorId)
+            .ToListAsync(ct);
+
+        _context.GuidanceAvailabilities.RemoveRange(existing);
+
+        var defaults = new List<GuidanceAvailability>();
+        for (int day = 1; day <= 5; day++)
+        {
+            defaults.Add(new GuidanceAvailability
+            {
+                CounselorId = counselorId,
+                DayOfWeek = day,
+                StartTime = new TimeSpan(8, 0, 0),
+                EndTime = new TimeSpan(12, 0, 0),
+                IsActive = true
+            });
+            defaults.Add(new GuidanceAvailability
+            {
+                CounselorId = counselorId,
+                DayOfWeek = day,
+                StartTime = new TimeSpan(13, 0, 0),
+                EndTime = new TimeSpan(17, 0, 0),
+                IsActive = true
+            });
+        }
+
+        _context.GuidanceAvailabilities.AddRange(defaults);
+
+        var profile = await _context.GuidanceCounselorProfiles
+            .FirstOrDefaultAsync(p => p.UserId == counselorId, ct);
+        if (profile != null)
+        {
+            profile.AvailabilitySeeded = true;
+            profile.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _context.SaveChangesAsync(ct);
+        return GuidanceResult<object>.Ok(new { }, "Default schedule restored: Mon-Fri, 8AM-12NN and 1PM-5PM.");
+    }
 
     public async Task<GuidanceResult<AvailabilityBlockDto>> AddAvailabilityAsync(
         int counselorId, AddAvailabilityRequest req, CancellationToken ct)
@@ -579,20 +673,14 @@ public class GuidanceCounselorService
         if (end <= start)
             return Fail<AvailabilityBlockDto>(400, "End time must be after start time.");
 
-        var active = req.IsActive ?? row.IsActive;
-
-        if (active)
-        {
-            var overlap = await _context.GuidanceAvailabilities.AnyAsync(a =>
-                a.CounselorId == counselorId && a.DayOfWeek == row.DayOfWeek && a.IsActive &&
-                a.Id != row.Id && a.StartTime < end && a.EndTime > start, ct);
-            if (overlap)
-                return Fail<AvailabilityBlockDto>(409, "This time overlaps with an existing schedule block.");
-        }
+        var overlap = await _context.GuidanceAvailabilities.AnyAsync(a =>
+            a.CounselorId == counselorId && a.DayOfWeek == row.DayOfWeek &&
+            a.Id != row.Id && a.StartTime < end && a.EndTime > start, ct);
+        if (overlap)
+            return Fail<AvailabilityBlockDto>(409, "This time overlaps with an existing schedule block.");
 
         row.StartTime = start;
         row.EndTime = end;
-        row.IsActive = active;
         await _context.SaveChangesAsync(ct);
 
         return GuidanceResult<AvailabilityBlockDto>.Ok(ToDto(row), "Availability updated.");
@@ -1010,7 +1098,7 @@ public class GuidanceCounselorService
         DayOfWeek = a.DayOfWeek,
         StartTime = T(a.StartTime),
         EndTime = T(a.EndTime),
-        IsActive = a.IsActive
+        IsActive = true
     };
 
     private static string NotReschedulable(string status) =>

@@ -217,6 +217,13 @@ public class GuidanceCounselorController : ControllerBase
         return Map(await _service.DeleteAvailabilityAsync(id, blockId, ct));
     }
 
+    [HttpPost("availability/reset-default")]
+    public async Task<IActionResult> ResetAvailabilityToDefault(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Map(await _service.ResetToDefaultAsync(id, ct));
+    }
+
     [HttpGet("day-offs")]
     public async Task<IActionResult> DayOffs(CancellationToken ct)
     {

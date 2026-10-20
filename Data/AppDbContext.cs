@@ -215,6 +215,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<GuidanceAvailability>(e =>
         {
             e.ToTable("guidance_availability");
+            e.HasIndex(x => new { x.CounselorId, x.DayOfWeek, x.StartTime, x.EndTime }).IsUnique();
             e.HasOne(x => x.Counselor).WithMany().HasForeignKey(x => x.CounselorId).OnDelete(DeleteBehavior.Cascade);
         });
 

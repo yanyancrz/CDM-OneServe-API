@@ -82,7 +82,7 @@ public class GuidanceScheduleService
 
         var blocks = await _context.GuidanceAvailabilities
             .AsNoTracking()
-            .Where(a => a.CounselorId == counselorId && a.DayOfWeek == dow && a.IsActive)
+            .Where(a => a.CounselorId == counselorId && a.DayOfWeek == dow)
             .OrderBy(a => a.StartTime)
             .ToListAsync(ct);
 

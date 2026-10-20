@@ -203,13 +203,22 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<DateTime?>("EndDate")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<string>("EndTime")
+                        .HasColumnType("longtext");
+
                     b.Property<DateTime>("EventDate")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<string>("EventDatesJson")
+                        .HasColumnType("longtext");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("tinyint(1)");
 
                     b.Property<string>("Location")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("StartTime")
                         .HasColumnType("longtext");
 
                     b.Property<string>("Tag")
@@ -353,7 +362,8 @@ namespace CDM_OneServe_API.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CounselorId");
+                    b.HasIndex("CounselorId", "DayOfWeek", "StartTime", "EndTime")
+                        .IsUnique();
 
                     b.ToTable("guidance_availability", (string)null);
                 });
@@ -485,6 +495,9 @@ namespace CDM_OneServe_API.Migrations
                         .HasColumnType("int");
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("AvailabilitySeeded")
+                        .HasColumnType("tinyint(1)");
 
                     b.Property<string>("Bio")
                         .HasColumnType("longtext");

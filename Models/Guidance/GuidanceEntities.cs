@@ -18,6 +18,14 @@ public class GuidanceCounselorProfile
     /// <summary>Comma separated, e.g. "Academic,Personal,Career".</summary>
     public string? Specializations { get; set; }
     public string? Bio { get; set; }
+
+    /// <summary>
+    /// True once the default availability schedule has been seeded for this
+    /// counselor. Prevents re-seeding after the counselor intentionally
+    /// deletes all blocks.
+    /// </summary>
+    public bool AvailabilitySeeded { get; set; } = false;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
