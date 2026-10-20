@@ -1,10 +1,13 @@
-﻿using CDM_OneServe_API.DTOs.Admin;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.DTOs.Admin;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using CDM_OneServe_API.Services.Admin;
 
 namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
+[Authorize(Roles = "Admin,SuperAdmin")]
 [Route("api/admin/profile")]
 public class AdminProfileController : ControllerBase
 {
@@ -24,8 +27,15 @@ public class AdminProfileController : ControllerBase
     [HttpGet("{email}")]
     public async Task<IActionResult> GetProfile(string email)
     {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        // The URL keeps its {email} segment for existing clients, but the
+        // signed-in admin's ID from the JWT decides whose profile is read.
         var profile =
-            await _adminProfileService.GetProfileAsync(email);
+            await _adminProfileService.GetProfileAsync(userId);
 
         if (profile == null)
         {
@@ -49,6 +59,11 @@ public class AdminProfileController : ControllerBase
         string email,
         [FromBody] UpdateAdminProfileRequest request)
     {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
         if (string.IsNullOrWhiteSpace(request.FullName))
         {
             return BadRequest(new
@@ -60,7 +75,7 @@ public class AdminProfileController : ControllerBase
 
         var profile =
             await _adminProfileService.UpdateProfileAsync(
-                email,
+                userId,
                 request
             );
 

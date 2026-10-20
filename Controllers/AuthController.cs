@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs;
 using CDM_OneServe_API.Models;
@@ -302,30 +303,23 @@ public class AuthController : ControllerBase
 
         await _context.SaveChangesAsync();
 
-        try
+        // Send credentials email in the background so the HTTP response
+        // is not blocked by the SMTP transaction.
+        _ = Task.Run(async () =>
         {
-            await _emailService.SendCredentialsAsync(
-                normalizedEmail,
-                user.IdNumber,
-                generatedPassword);
-        }
-        catch (Exception ex)
-        {
-            _context.Users.Remove(user);
-
-            if (trackedRecord != null)
+            try
             {
-                trackedRecord.IsUsed = false;
+                await _emailService.SendCredentialsAsync(
+                    normalizedEmail,
+                    user.IdNumber,
+                    generatedPassword);
             }
-
-            await _context.SaveChangesAsync();
-
-            return StatusCode(500, new
+            catch
             {
-                message = "Unable to send login credentials email.",
-                error = ex.Message
-            });
-        }
+                // Best-effort: do not fail the registration response
+                // because of an email delivery problem.
+            }
+        });
 
         return Ok(new
         {
@@ -854,11 +848,20 @@ public class AuthController : ControllerBase
 
         await _context.SaveChangesAsync();
 
-        await _emailService.SendOtpAsync(
-            email!,
-            otpCode,
-            "forgotpassword"
-        );
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _emailService.SendOtpAsync(
+                    email!,
+                    otpCode,
+                    "forgotpassword");
+            }
+            catch
+            {
+                // Best-effort email delivery.
+            }
+        });
 
         return Ok(new { message = "OTP Sent" });
     }
@@ -895,6 +898,10 @@ public class AuthController : ControllerBase
         }
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+
+        // A password reset must end every existing session. There is no
+        // signed-in token to preserve here, so stamp with "now".
+        TokenRevocation.Stamp(user, null);
 
         // The user chose this password, so it is no longer the one we mailed.
         user.MustChangePassword = false;
@@ -1374,7 +1381,19 @@ public class AuthController : ControllerBase
                 });
             }
 
+            var emailChanged = !string.Equals(
+                user.Email,
+                email,
+                StringComparison.OrdinalIgnoreCase);
+
             user.Email = email;
+
+            if (emailChanged)
+            {
+                // An admin changed this account's identity. End all of its
+                // sessions; the target is not the signed-in caller.
+                TokenRevocation.Stamp(user, null);
+            }
         }
 
         // =====================================================

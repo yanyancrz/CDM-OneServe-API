@@ -7,6 +7,7 @@ using CDM_OneServe_API.DTOs.Guidance.Admin;
 using CDM_OneServe_API.Services.Guidance;
 
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CDM_OneServe_API.Controllers.Guidance;
@@ -68,7 +69,11 @@ public class AdminGuidanceHeadController : ControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        return ToAction(await _service.ChangeOwnPasswordAsync(userId, request, ct));
+        return ToAction(await _service.ChangeOwnPasswordAsync(
+            userId,
+            request,
+            User.GetTokenIssuedAt(),
+            ct));
     }
 
     // --------------------------------------------------
@@ -96,6 +101,10 @@ public class AdminGuidanceHeadController : ControllerBase
     [HttpPut("counselors/{id:int}")]
     public async Task<IActionResult> UpdateCounselor(int id, [FromBody] UpdateCounselorRequest request, CancellationToken ct) =>
         ToAction(await _service.UpdateCounselorAsync(id, request, ct));
+
+    [HttpPost("counselors/{id:int}/photo")]
+    public async Task<IActionResult> UploadCounselorPhoto(int id, IFormFile file, CancellationToken ct) =>
+        ToAction(await _service.UploadCounselorPhotoAsync(id, file, ct));
 
     [HttpPatch("counselors/{id:int}/status")]
     public async Task<IActionResult> SetCounselorStatus(int id, [FromBody] UpdateAccountStatusRequest request, CancellationToken ct) =>

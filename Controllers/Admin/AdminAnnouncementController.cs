@@ -1,13 +1,16 @@
-﻿using CDM_OneServe_API.Data;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Admin;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Services.Notifications;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
+[Authorize(Roles = "Admin,SuperAdmin")]
 [Route("api/admin/announcements")]
 public class AdminAnnouncementController : ControllerBase
 {
@@ -62,37 +65,15 @@ public class AdminAnnouncementController : ControllerBase
     }
 
     // =========================================================
-    // ADMIN CHECK
-    // =========================================================
-
-    private async Task<User?> GetAdminAsync(string email)
-    {
-        if (string.IsNullOrWhiteSpace(email))
-        {
-            return null;
-        }
-
-        return await _context.Users
-            .FirstOrDefaultAsync(u =>
-                u.Email == email &&
-                u.Role == "Admin");
-    }
-
-    // =========================================================
     // GET ALL ANNOUNCEMENTS
     // =========================================================
 
     [HttpGet]
     public async Task<IActionResult> GetAll(
-        [FromQuery] string adminEmail)
+        [FromQuery] string? adminEmail = null)
     {
-        var admin = await GetAdminAsync(adminEmail);
-
-        if (admin == null)
-        {
-            return Forbid();
-        }
-
+        // The query value is kept for older clients. Access is enforced by
+        // [Authorize(Roles = "Admin,SuperAdmin")].
         var announcements = await _context.Announcements
             .AsNoTracking()
             .OrderByDescending(a => a.CreatedAt)
@@ -109,12 +90,9 @@ public class AdminAnnouncementController : ControllerBase
     public async Task<IActionResult> Create(
         [FromBody] AnnouncementRequest request)
     {
-        var admin = await GetAdminAsync(
-            request.AdminEmail);
-
-        if (admin == null)
+        if (!User.TryGetUserId(out var currentUserId))
         {
-            return Forbid();
+            return Unauthorized();
         }
 
         if (string.IsNullOrWhiteSpace(request.Title))
@@ -156,7 +134,7 @@ public class AdminAnnouncementController : ControllerBase
 
             IsActive = request.IsActive,
 
-            CreatedBy = admin.Id,
+            CreatedBy = currentUserId,
 
             CreatedAt = DateTime.Now,
 
@@ -187,14 +165,6 @@ public class AdminAnnouncementController : ControllerBase
         int id,
         [FromBody] AnnouncementRequest request)
     {
-        var admin = await GetAdminAsync(
-            request.AdminEmail);
-
-        if (admin == null)
-        {
-            return Forbid();
-        }
-
         var announcement =
             await _context.Announcements
                 .FirstOrDefaultAsync(a => a.Id == id);
@@ -277,16 +247,10 @@ public class AdminAnnouncementController : ControllerBase
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(
         int id,
-        [FromQuery] string adminEmail)
+        [FromQuery] string? adminEmail = null)
     {
-        var admin = await GetAdminAsync(
-            adminEmail);
-
-        if (admin == null)
-        {
-            return Forbid();
-        }
-
+        // The query value is kept for older clients. Access is enforced by
+        // [Authorize(Roles = "Admin,SuperAdmin")].
         var announcement =
             await _context.Announcements
                 .FirstOrDefaultAsync(a => a.Id == id);

@@ -6,6 +6,7 @@ using CDM_OneServe_API.DTOs.Guidance;
 using CDM_OneServe_API.DTOs.Guidance.Admin;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Guidance;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Services.Guidance;
@@ -99,6 +100,7 @@ public class AdminGuidanceHeadService
     public async Task<GuidanceResult<object>> ChangeOwnPasswordAsync(
         int userId,
         GuidanceChangePasswordRequest request,
+        DateTime? currentTokenIssuedAt,
         CancellationToken ct)
     {
         var current = request.CurrentPassword ?? "";
@@ -133,6 +135,10 @@ public class AdminGuidanceHeadService
                 "New password cannot be the same as your current password.");
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(next);
+
+        // End every session issued before this one; the caller's own token
+        // is kept alive by stamping just before its iat.
+        TokenRevocation.Stamp(user, currentTokenIssuedAt);
 
         _context.UserActivities.Add(new UserActivity
         {
@@ -392,6 +398,7 @@ public class AdminGuidanceHeadService
             IdNumber = base3.IdNumber,
             FullName = base3.FullName,
             Email = base3.Email,
+            ProfilePicture = base3.ProfilePicture,
             AccountStatus = base3.AccountStatus,
             Title = base3.Title,
             Room = base3.Room,
@@ -460,8 +467,8 @@ public class AdminGuidanceHeadService
         _context.GuidanceCounselorProfiles.Add(new GuidanceCounselorProfile
         {
             UserId = user.Id,
-            Title = request.Title,
-            Room = request.Room,
+            Title = "Registered Guidance Counselor",
+            Room = "Guidance and Counseling Center",
             Phone = request.Phone,
             Department = request.Department,
             Specializations = JoinSpecializations(request.Specializations)
@@ -489,9 +496,21 @@ public class AdminGuidanceHeadService
                 u => u.Id != id && u.Email.ToLower() == emailKey && u.AccountStatus != "Deleted", ct))
             return GuidanceResult<GuidanceCounselorListItemDto>.Fail(400, "That email is already registered.");
 
+        var emailChanged = !string.Equals(
+            user.Email,
+            email,
+            StringComparison.OrdinalIgnoreCase);
+
         user.FullName = request.FullName.Trim();
         user.Email = email;
         user.IsProfileComplete = true;
+
+        if (emailChanged)
+        {
+            // An admin changed this counselor's identity. End all of the
+            // counselor's sessions; the counselor is not the signed-in caller.
+            TokenRevocation.Stamp(user, null);
+        }
 
         var profile = await _context.GuidanceCounselorProfiles
             .FirstOrDefaultAsync(p => p.UserId == id, ct);
@@ -502,8 +521,8 @@ public class AdminGuidanceHeadService
             _context.GuidanceCounselorProfiles.Add(profile);
         }
 
-        profile.Title = NullIfBlank(request.Title);
-        profile.Room = NullIfBlank(request.Room);
+        profile.Title = "Registered Guidance Counselor";
+        profile.Room = "Guidance and Counseling Center";
         profile.Department = NullIfBlank(request.Department);
         profile.Phone = NullIfBlank(request.Phone);
         profile.Bio = NullIfBlank(request.Bio);
@@ -515,6 +534,47 @@ public class AdminGuidanceHeadService
         var decorated = await DecorateCounselorsAsync(new List<User> { user }, ct);
 
         return GuidanceResult<GuidanceCounselorListItemDto>.Ok(decorated[0], "Counselor updated.");
+    }
+
+    public async Task<GuidanceResult<object>> UploadCounselorPhotoAsync(
+        int id, IFormFile file, CancellationToken ct)
+    {
+        if (file == null || file.Length == 0)
+            return GuidanceResult<object>.Fail(400, "No file uploaded.");
+
+        var allowed = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!allowed.Contains(extension))
+            return GuidanceResult<object>.Fail(400, "Only JPG, PNG, or WEBP images are allowed.");
+
+        if (file.Length > 5 * 1024 * 1024)
+            return GuidanceResult<object>.Fail(400, "Image must be 5 MB or smaller.");
+
+        var user = await _context.Users.FirstOrDefaultAsync(
+            u => u.Id == id && u.Role == GuidanceRoles.Counselor, ct);
+
+        if (user == null)
+            return GuidanceResult<object>.Fail(404, "Counselor not found.");
+
+        var uploadPath = Path.Combine(
+            Directory.GetCurrentDirectory(), "wwwroot", "uploads", "profile");
+
+        if (!Directory.Exists(uploadPath))
+            Directory.CreateDirectory(uploadPath);
+
+        var fileName = Guid.NewGuid() + extension;
+        var filePath = Path.Combine(uploadPath, fileName);
+
+        await using (var stream = new FileStream(filePath, FileMode.Create))
+        {
+            await file.CopyToAsync(stream, ct);
+        }
+
+        user.ProfilePicture = $"/uploads/profile/{fileName}";
+        await _context.SaveChangesAsync(ct);
+
+        return GuidanceResult<object>.Ok(
+            new { imageUrl = user.ProfilePicture }, "Profile picture updated.");
     }
 
     public async Task<GuidanceResult<object>> SetCounselorStatusAsync(
@@ -865,6 +925,7 @@ public class AdminGuidanceHeadService
                 IdNumber = u.IdNumber,
                 FullName = u.FullName,
                 Email = u.Email,
+                ProfilePicture = u.ProfilePicture,
                 AccountStatus = u.AccountStatus,
                 Title = profile?.Title,
                 Room = profile?.Room,

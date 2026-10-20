@@ -1,9 +1,12 @@
-﻿using CDM_OneServe_API.Services.Library;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Services.Library;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CDM_OneServe_API.Controllers.Library;
 
 [ApiController]
+[Authorize]
 [Route("api/library/attendance")]
 public class LibraryAttendanceController : ControllerBase
 {
@@ -15,6 +18,7 @@ public class LibraryAttendanceController : ControllerBase
         _attendanceService = attendanceService;
     }
 
+    [Authorize(Roles = "LibraryAdmin,LibraryStaff,SuperAdmin")]
     [HttpPost]
     public async Task<IActionResult> RecordAttendance(
         [FromBody] AttendanceRequest request)
@@ -36,6 +40,16 @@ public class LibraryAttendanceController : ControllerBase
     [HttpGet("student/{userId}")]
     public async Task<IActionResult> GetStudentAttendance(int userId)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        if (currentUserId != userId && !User.IsLibraryStaff())
+        {
+            return Forbid();
+        }
+
         var result =
             await _attendanceService.GetStudentAttendanceAsync(userId);
 

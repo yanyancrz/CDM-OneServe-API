@@ -1,10 +1,13 @@
-﻿using CDM_OneServe_API.DTOs.Admin;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.DTOs.Admin;
 using CDM_OneServe_API.Services.Admin;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
+[Authorize(Roles = "Admin,SuperAdmin")]
 [Route("api/admin")]
 public class AdminAccountController : ControllerBase
 {
@@ -19,13 +22,9 @@ public class AdminAccountController : ControllerBase
     public async Task<IActionResult> ChangePassword(
         [FromBody] ChangeAdminPasswordRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.Email))
+        if (!User.TryGetUserId(out var userId))
         {
-            return BadRequest(new
-            {
-                success = false,
-                message = "Email is required."
-            });
+            return Unauthorized();
         }
 
         if (string.IsNullOrWhiteSpace(request.CurrentPassword))
@@ -47,7 +46,10 @@ public class AdminAccountController : ControllerBase
         }
 
         var result =
-            await _adminProfileService.ChangePasswordAsync(request);
+            await _adminProfileService.ChangePasswordAsync(
+                userId,
+                request,
+                User.GetTokenIssuedAt());
 
         if (!result.Success)
         {

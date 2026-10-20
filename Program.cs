@@ -253,7 +253,7 @@ builder.Services
                 return Task.CompletedTask;
             },
 
-            // ---------- "Log out on all devices" ----------
+            // ---------- "Log out on all devices" / password or email change ----------
             // A JWT cannot be un-issued, so the token carries the moment it
             // was minted (iat) and the user row carries the moment every
             // older token stopped counting (Users.TokensValidFrom). A token

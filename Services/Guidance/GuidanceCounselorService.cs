@@ -4,6 +4,7 @@ using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Guidance;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Guidance;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 
@@ -76,6 +77,45 @@ public class GuidanceCounselorService
 
         await _context.SaveChangesAsync(ct);
         return GuidanceResult<object>.Ok(new { }, "Profile updated.");
+    }
+
+    public async Task<GuidanceResult<object>> UploadPhotoAsync(
+        int counselorId, IFormFile file, CancellationToken ct)
+    {
+        if (file == null || file.Length == 0)
+            return GuidanceResult<object>.Fail(400, "No file uploaded.");
+
+        var allowed = new[] { ".jpg", ".jpeg", ".png", ".webp" };
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!allowed.Contains(extension))
+            return GuidanceResult<object>.Fail(400, "Only JPG, PNG, or WEBP images are allowed.");
+
+        if (file.Length > 5 * 1024 * 1024)
+            return GuidanceResult<object>.Fail(400, "Image must be 5 MB or smaller.");
+
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == counselorId, ct);
+        if (user == null)
+            return GuidanceResult<object>.Fail(404, "Counselor not found.");
+
+        var uploadPath = Path.Combine(
+            Directory.GetCurrentDirectory(), "wwwroot", "uploads", "profile");
+
+        if (!Directory.Exists(uploadPath))
+            Directory.CreateDirectory(uploadPath);
+
+        var fileName = Guid.NewGuid() + extension;
+        var filePath = Path.Combine(uploadPath, fileName);
+
+        await using (var stream = new FileStream(filePath, FileMode.Create))
+        {
+            await file.CopyToAsync(stream, ct);
+        }
+
+        user.ProfilePicture = $"/uploads/profile/{fileName}";
+        await _context.SaveChangesAsync(ct);
+
+        return GuidanceResult<object>.Ok(
+            new { imageUrl = user.ProfilePicture }, "Profile picture updated.");
     }
 
     // ------------------------------------------------------------------
@@ -268,29 +308,38 @@ public class GuidanceCounselorService
                     ? $"{counselorName} {verb} your appointment on {D(appt.Date)} at {appt.TimeSlot}. The session is terminated - please book a new appointment if you still need one."
                     : $"{counselorName} {verb} your appointment on {D(appt.Date)} at {appt.TimeSlot}.", ct);
 
-            // Email the student the decision too. A failure here must
-            // never fail the status update.
-            try
-            {
-                var student = await _context.Users.AsNoTracking()
-                    .Where(u => u.Id == appt.StudentId)
-                    .Select(u => new { u.Email, u.FullName })
-                    .FirstOrDefaultAsync(ct);
+            // Email the student the decision too, in the background so the
+            // HTTP response is not blocked by the SMTP transaction.
+            var studentForEmail = await _context.Users.AsNoTracking()
+                .Where(u => u.Id == appt.StudentId)
+                .Select(u => new { u.Email, u.FullName })
+                .FirstOrDefaultAsync(ct);
 
-                if (student != null)
-                {
-                    await _email.SendStudentAppointmentDecisionAsync(
-                        student.Email,
-                        student.FullName,
-                        counselorName,
-                        D(appt.Date),
-                        appt.TimeSlot,
-                        status);
-                }
-            }
-            catch (Exception ex)
+            if (studentForEmail != null)
             {
-                _logger.LogWarning(ex, "Guidance: student email failed for appointment {Id}.", appt.Id);
+                var emailStudent = studentForEmail;
+                var emailCounselor = counselorName;
+                var emailDate = D(appt.Date);
+                var emailTime = appt.TimeSlot;
+                var emailStatus = status;
+                var emailApptId = appt.Id;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _email.SendStudentAppointmentDecisionAsync(
+                            emailStudent.Email,
+                            emailStudent.FullName,
+                            emailCounselor,
+                            emailDate,
+                            emailTime,
+                            emailStatus);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Guidance: student email failed for appointment {Id}.", emailApptId);
+                    }
+                });
             }
         }
 

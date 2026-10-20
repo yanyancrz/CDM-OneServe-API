@@ -1,10 +1,13 @@
-﻿using CDM_OneServe_API.DTOs.Admin;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.DTOs.Admin;
 using CDM_OneServe_API.Services.Admin;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CDM_OneServe_API.Controllers.Admin;
 
 [ApiController]
+[Authorize(Roles = "Admin,SuperAdmin")]
 [Route("api/admin/notification-prefs")]
 public class AdminNotificationController : ControllerBase
 {
@@ -27,9 +30,15 @@ public class AdminNotificationController : ControllerBase
     public async Task<IActionResult>
         GetPreferences(string email)
     {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        // The {email} segment is retained for compatibility only.
         var preferences =
             await _notificationService
-                .GetPreferencesAsync(email);
+                .GetPreferencesAsync(userId);
 
         if (preferences == null)
         {
@@ -54,20 +63,14 @@ public class AdminNotificationController : ControllerBase
             [FromBody]
             AdminNotificationPreferenceDto request)
     {
-        if (string.IsNullOrWhiteSpace(
-            request.Email))
+        if (!User.TryGetUserId(out var userId))
         {
-            return BadRequest(new
-            {
-                success = false,
-                message = "Email is required."
-            });
+            return Unauthorized();
         }
-
 
         var result =
             await _notificationService
-                .SavePreferencesAsync(request);
+                .SavePreferencesAsync(userId, request);
 
 
         if (!result.Success)

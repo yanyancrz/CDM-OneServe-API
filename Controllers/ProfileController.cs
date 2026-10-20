@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs;
 using CDM_OneServe_API.Models;
@@ -7,6 +9,7 @@ using CDM_OneServe_API.Services;
 namespace CDM_OneServe_API.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public class ProfileController : ControllerBase
 {
@@ -58,9 +61,16 @@ public class ProfileController : ControllerBase
     public IActionResult SetupProfile(
         ProfileSetupRequest request)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        // The route stays compatible with the existing client, but the
+        // account being edited always comes from the signed-in JWT.
         var user = _context.Users
             .FirstOrDefault(x =>
-                x.Id == request.UserId);
+                x.Id == currentUserId);
 
         if (user == null)
         {
@@ -110,7 +120,13 @@ public class ProfileController : ControllerBase
                 return BadRequest("Invalid role.");
             }
 
-            user.Role = newRole;
+            // Registration already sets the role from the School Records
+            // check. Profile setup may only fill a missing role; it must
+            // never let a signed-in account switch to another role.
+            if (string.IsNullOrWhiteSpace(user.Role))
+            {
+                user.Role = newRole;
+            }
         }
 
         // =====================================================
@@ -183,21 +199,51 @@ public class ProfileController : ControllerBase
     // photo upload sa admin, kaya walang admin log dito.
     // =========================================================
 
+    [RequestSizeLimit(5 * 1024 * 1024)]
     [HttpPost("upload-photo")]
     public async Task<IActionResult> UploadPhoto(
-        IFormFile file,
-        [FromForm] int userId)
+        IFormFile file)
     {
-        if (file == null)
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        if (file == null || file.Length == 0)
         {
             return BadRequest(
                 "No file uploaded");
         }
 
+        if (file.Length > 5 * 1024 * 1024)
+        {
+            return BadRequest(
+                "Profile photo must be 5 MB or smaller.");
+        }
+
+        var extension =
+            Path.GetExtension(file.FileName)
+                .ToLowerInvariant();
+
+        var allowedExtensions =
+            new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+
+        if (!allowedExtensions.Contains(extension))
+        {
+            return BadRequest(
+                "Profile photo must be a JPG, PNG, GIF, or WEBP image.");
+        }
+
+        if (!await HasAllowedImageSignatureAsync(file))
+        {
+            return BadRequest(
+                "The uploaded file is not a valid image.");
+        }
+
         var user =
             _context.Users
                 .FirstOrDefault(x =>
-                    x.Id == userId);
+                    x.Id == currentUserId);
 
         if (user == null)
         {
@@ -207,8 +253,7 @@ public class ProfileController : ControllerBase
 
         var fileName =
             Guid.NewGuid() +
-            Path.GetExtension(
-                file.FileName);
+            extension;
 
         var uploadPath =
             Path.Combine(
@@ -282,6 +327,11 @@ public class ProfileController : ControllerBase
     public IActionResult GetProfile(
         string email)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
         var user = _context.Users
             .FirstOrDefault(x =>
                 x.Email == email);
@@ -289,6 +339,19 @@ public class ProfileController : ControllerBase
         if (user == null)
         {
             return NotFound();
+        }
+
+        // A user may read their own profile. Admin console screens and
+        // Guidance counselors (who display student photos in their
+        // appointment list) may read another account's profile.
+        var canReadOtherProfiles =
+            User.IsPlatformAdmin() ||
+            User.IsInRole(GuidanceRoles.Counselor) ||
+            User.IsInRole(GuidanceRoles.Head);
+
+        if (user.Id != currentUserId && !canReadOtherProfiles)
+        {
+            return Forbid();
         }
 
         return Ok(new
@@ -332,12 +395,22 @@ public class ProfileController : ControllerBase
     public IActionResult UpdateProfile(
         UpdateProfileRequest request)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        if (request.UserId > 0 && request.UserId != currentUserId)
+        {
+            return Forbid();
+        }
+
         var user =
             _context.Users
                 .FirstOrDefault(
                     x =>
                         x.Id ==
-                        request.UserId
+                        currentUserId
                 );
 
         if (user == null)
@@ -487,15 +560,38 @@ public class ProfileController : ControllerBase
         RequestEmailChange(
             RequestEmailChangeRequest request)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        if (request.UserId > 0 && request.UserId != currentUserId)
+        {
+            return Forbid();
+        }
+
         var user = _context.Users
             .FirstOrDefault(x =>
-                x.Id ==
-                request.UserId);
+                x.Id == currentUserId);
 
         if (user == null)
         {
             return NotFound(
                 "User not found");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.CurrentPassword))
+        {
+            return BadRequest(
+                "Current password is required to change your email.");
+        }
+
+        if (!BCrypt.Net.BCrypt.Verify(
+                request.CurrentPassword,
+                user.PasswordHash))
+        {
+            return BadRequest(
+                "Current password is incorrect.");
         }
 
         var newEmail =
@@ -537,7 +633,7 @@ public class ProfileController : ControllerBase
         var newEmailLower = newEmail.ToLower();
 
         var emailTaken = _context.Users.Any(x =>
-            x.Id != request.UserId &&
+            x.Id != currentUserId &&
             x.Email != null &&
             x.Email.ToLower() == newEmailLower &&
             x.AccountStatus != "Deleted");
@@ -550,7 +646,7 @@ public class ProfileController : ControllerBase
 
         // Another user's pending OTP for the same email.
         var pendingTaken = _context.EmailChangeRequests.Any(x =>
-            x.UserId != request.UserId &&
+            x.UserId != currentUserId &&
             x.NewEmail != null &&
             x.NewEmail.ToLower() == newEmailLower);
 
@@ -571,7 +667,7 @@ public class ProfileController : ControllerBase
             _context.EmailChangeRequests
                 .FirstOrDefault(x =>
                     x.UserId ==
-                    request.UserId);
+                    currentUserId);
 
         if (existing != null)
         {
@@ -583,7 +679,7 @@ public class ProfileController : ControllerBase
             new EmailChangeRequest
             {
                 UserId =
-                    request.UserId,
+                    currentUserId,
 
                 NewEmail =
                     newEmail,
@@ -618,11 +714,20 @@ public class ProfileController : ControllerBase
 
         await _context.SaveChangesAsync();
 
-        await _emailService.SendOtpAsync(
-            newEmail,
-            otpCode,
-            "emailchange"
-        );
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _emailService.SendOtpAsync(
+                    newEmail,
+                    otpCode,
+                    "emailchange");
+            }
+            catch
+            {
+                // Best-effort email delivery.
+            }
+        });
 
         return Ok(
             "OTP sent to new email");
@@ -638,11 +743,21 @@ public class ProfileController : ControllerBase
     public IActionResult VerifyEmailChange(
         VerifyEmailChangeRequest request)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        if (request.UserId > 0 && request.UserId != currentUserId)
+        {
+            return Forbid();
+        }
+
         var record =
             _context.EmailChangeRequests
                 .FirstOrDefault(x =>
                     x.UserId ==
-                        request.UserId &&
+                        currentUserId &&
                     x.OTPCode ==
                         request.OTPCode);
 
@@ -665,7 +780,7 @@ public class ProfileController : ControllerBase
             _context.Users
                 .FirstOrDefault(x =>
                     x.Id ==
-                    request.UserId);
+                    currentUserId);
 
         if (user == null)
         {
@@ -684,7 +799,7 @@ public class ProfileController : ControllerBase
             record.NewEmail.Trim().ToLower();
 
         var emailTaken = _context.Users.Any(x =>
-            x.Id != request.UserId &&
+            x.Id != currentUserId &&
             x.Email != null &&
             x.Email.ToLower() == pendingEmailLower &&
             x.AccountStatus != "Deleted");
@@ -705,6 +820,10 @@ public class ProfileController : ControllerBase
 
         user.Email =
             record.NewEmail;
+
+        // The account's identity changed. Revoke tokens issued before this
+        // one so a stolen session cannot keep the old email alive.
+        TokenRevocation.Stamp(user, User.GetTokenIssuedAt());
 
         _context.EmailChangeRequests
             .Remove(record);
@@ -752,13 +871,14 @@ public class ProfileController : ControllerBase
     public IActionResult ChangePassword(
         ChangePasswordRequest request)
     {
-        if (request.UserId <= 0)
+        if (!User.TryGetUserId(out var currentUserId))
         {
-            return BadRequest(new
-            {
-                message =
-                    "Invalid user."
-            });
+            return Unauthorized();
+        }
+
+        if (request.UserId > 0 && request.UserId != currentUserId)
+        {
+            return Forbid();
         }
 
         if (
@@ -800,7 +920,7 @@ public class ProfileController : ControllerBase
             _context.Users
                 .FirstOrDefault(x =>
                     x.Id ==
-                    request.UserId);
+                    currentUserId);
 
         if (user == null)
         {
@@ -843,6 +963,10 @@ public class ProfileController : ControllerBase
             BCrypt.Net.BCrypt.HashPassword(
                 request.NewPassword
             );
+
+        // A password change must end every other session. This device's
+        // token is kept alive by stamping just before its own iat.
+        TokenRevocation.Stamp(user, User.GetTokenIssuedAt());
 
         // By choosing a new password the user is off the one we mailed.
         user.MustChangePassword = false;
@@ -899,6 +1023,11 @@ public class ProfileController : ControllerBase
     public async Task<IActionResult> RequestPasswordOtp(
         ProfilePasswordOtpRequest request)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
         var email =
             request.Email?.Trim().ToLowerInvariant() ?? "";
 
@@ -917,10 +1046,14 @@ public class ProfileController : ControllerBase
 
         var user =
             _context.Users.FirstOrDefault(x =>
-                x.Email.ToLower() == email &&
+                x.Id == currentUserId &&
                 x.AccountStatus != "Deleted");
 
         if (user == null ||
+            !string.Equals(
+                user.Email,
+                email,
+                StringComparison.OrdinalIgnoreCase) ||
             NormalizeIdNumber(user.IdNumber) != normalizedId)
         {
             return BadRequest(new
@@ -953,10 +1086,20 @@ public class ProfileController : ControllerBase
 
         await _context.SaveChangesAsync();
 
-        await _emailService.SendOtpAsync(
-            user.Email,
-            otpCode,
-            "forgotpassword");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _emailService.SendOtpAsync(
+                    user.Email,
+                    otpCode,
+                    "forgotpassword");
+            }
+            catch
+            {
+                // Best-effort email delivery.
+            }
+        });
 
         return Ok(new
         {
@@ -970,6 +1113,11 @@ public class ProfileController : ControllerBase
     public async Task<IActionResult> ConfirmPasswordOtp(
         ProfilePasswordOtpConfirmRequest request)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
         if (string.IsNullOrWhiteSpace(request.NewPassword) ||
             request.NewPassword.Length < 8)
         {
@@ -988,10 +1136,14 @@ public class ProfileController : ControllerBase
 
         var user =
             _context.Users.FirstOrDefault(x =>
-                x.Email.ToLower() == email &&
+                x.Id == currentUserId &&
                 x.AccountStatus != "Deleted");
 
         if (user == null ||
+            !string.Equals(
+                user.Email,
+                email,
+                StringComparison.OrdinalIgnoreCase) ||
             NormalizeIdNumber(user.IdNumber) != normalizedId)
         {
             return BadRequest(new
@@ -1043,6 +1195,10 @@ public class ProfileController : ControllerBase
                 request.NewPassword
             );
 
+        // Revoke sessions issued before this one, but keep the current
+        // token usable so the signed-in user is not thrown out.
+        TokenRevocation.Stamp(user, User.GetTokenIssuedAt());
+
         // Off the password we mailed at registration.
         user.MustChangePassword = false;
 
@@ -1068,6 +1224,66 @@ public class ProfileController : ControllerBase
             message =
                 "Password changed successfully."
         });
+    }
+
+
+    // =========================================================
+    // HELPER — IMAGE SIGNATURE CHECK
+    // =========================================================
+    private static async Task<bool> HasAllowedImageSignatureAsync(
+        IFormFile file)
+    {
+        var header = new byte[12];
+
+        await using var stream = file.OpenReadStream();
+        var read = await stream.ReadAsync(header);
+
+        if (read >= 3 &&
+            header[0] == 0xFF &&
+            header[1] == 0xD8 &&
+            header[2] == 0xFF)
+        {
+            return true; // JPEG
+        }
+
+        if (read >= 8 &&
+            header[0] == 0x89 &&
+            header[1] == 0x50 &&
+            header[2] == 0x4E &&
+            header[3] == 0x47 &&
+            header[4] == 0x0D &&
+            header[5] == 0x0A &&
+            header[6] == 0x1A &&
+            header[7] == 0x0A)
+        {
+            return true; // PNG
+        }
+
+        if (read >= 6 &&
+            header[0] == 'G' &&
+            header[1] == 'I' &&
+            header[2] == 'F' &&
+            header[3] == '8' &&
+            (header[4] == '7' || header[4] == '9') &&
+            header[5] == 'a')
+        {
+            return true; // GIF
+        }
+
+        if (read >= 12 &&
+            header[0] == 'R' &&
+            header[1] == 'I' &&
+            header[2] == 'F' &&
+            header[3] == 'F' &&
+            header[8] == 'W' &&
+            header[9] == 'E' &&
+            header[10] == 'B' &&
+            header[11] == 'P')
+        {
+            return true; // WEBP
+        }
+
+        return false;
     }
 
 

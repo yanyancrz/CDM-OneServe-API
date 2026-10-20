@@ -23,12 +23,12 @@ public class AdminNotificationService
     // GET NOTIFICATION PREFERENCES
     // =====================================
     public async Task<AdminNotificationPreferenceDto?>
-        GetPreferencesAsync(string email)
+        GetPreferencesAsync(int userId)
     {
         var user = await _context.Users
             .AsNoTracking()
             .FirstOrDefaultAsync(x =>
-                x.Email == email);
+                x.Id == userId);
 
         if (user == null)
         {
@@ -78,11 +78,12 @@ public class AdminNotificationService
     // =====================================
     public async Task<(bool Success, string Message)>
         SavePreferencesAsync(
+            int userId,
             AdminNotificationPreferenceDto request)
     {
         var user = await _context.Users
             .FirstOrDefaultAsync(x =>
-                x.Email == request.Email);
+                x.Id == userId);
 
         if (user == null)
         {

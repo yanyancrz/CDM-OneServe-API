@@ -1,10 +1,13 @@
-﻿using CDM_OneServe_API.Data;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/profile/activity")]
 public class UserActivityController : ControllerBase
 {
@@ -24,6 +27,11 @@ public class UserActivityController : ControllerBase
     public async Task<IActionResult> GetUserActivity(
         string email)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
         if (string.IsNullOrWhiteSpace(email))
         {
             return BadRequest(new
@@ -43,6 +51,11 @@ public class UserActivityController : ControllerBase
             {
                 message = "User not found."
             });
+        }
+
+        if (user.Id != currentUserId && !User.IsPlatformAdmin())
+        {
+            return Forbid();
         }
 
         var activities = await _context.UserActivities

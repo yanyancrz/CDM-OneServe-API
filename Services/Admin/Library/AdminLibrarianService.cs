@@ -1,5 +1,6 @@
 ﻿using System.Security.Cryptography;
 
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Admin.Library.Common;
 using CDM_OneServe_API.DTOs.Admin.Library.Librarians;
@@ -173,9 +174,21 @@ public class AdminLibrarianService : IAdminLibrarianService
         var duplicate = await FindDuplicateAsync(email, idNumber, id, cancellationToken);
         if (duplicate != null) return LibraryResult<LibrarianDto>.Failure(409, duplicate);
 
+        var emailChanged = !string.Equals(
+            user.Email,
+            email,
+            StringComparison.OrdinalIgnoreCase);
+
         user.FullName = fullName;
         user.IdNumber = idNumber;
         user.Email = email;
+
+        if (emailChanged)
+        {
+            // An admin changed this staff account's identity. End all of its
+            // sessions; the staff member is not the signed-in caller.
+            TokenRevocation.Stamp(user, null);
+        }
 
         _activity.Add(headId, "LIBRARY_LIBRARIAN_UPDATED", $"updated the Library Staff account of {fullName}");
 
@@ -224,6 +237,10 @@ public class AdminLibrarianService : IAdminLibrarianService
         var temporary = GeneratePassword();
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(temporary);
+
+        // A password reset must end every existing session. There is no
+        // signed-in token to preserve here, so stamp with "now".
+        TokenRevocation.Stamp(user, null);
 
         // The password itself is never written to the log.
         _activity.Add(headId, "LIBRARY_LIBRARIAN_PASSWORD_RESET", $"reset the password of {user.FullName}");

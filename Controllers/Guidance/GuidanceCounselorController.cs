@@ -4,6 +4,7 @@ using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.DTOs.Guidance;
 using CDM_OneServe_API.Services.Guidance;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CDM_OneServe_API.Controllers.Guidance;
@@ -54,6 +55,13 @@ public class GuidanceCounselorController : ControllerBase
     {
         if (!TryGetUserId(out var id)) return Invalid();
         return Map(await _service.UpdateProfileAsync(id, request, ct));
+    }
+
+    [HttpPost("photo")]
+    public async Task<IActionResult> UploadPhoto(IFormFile file, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Map(await _service.UploadPhotoAsync(id, file, ct));
     }
 
     [HttpGet("reports")]

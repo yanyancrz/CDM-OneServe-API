@@ -1,20 +1,32 @@
-﻿using CDM_OneServe_API.DTOs.Admin.Library;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Data;
+using CDM_OneServe_API.DTOs.Admin.Library;
 using CDM_OneServe_API.Services.Library;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Controllers.Library;
 
 [ApiController]
+[Authorize]
 [Route("api/library/reservations")]
 public class ReservationController : ControllerBase
 {
     private readonly ReservationService _reservationService;
+    private readonly AppDbContext _context;
 
-    public ReservationController(ReservationService reservationService)
+    public ReservationController(
+        ReservationService reservationService,
+        AppDbContext context)
     {
         _reservationService = reservationService;
+        _context = context;
     }
+
+    private bool CanAccessUser(int userId) =>
+        User.TryGetUserId(out var currentUserId) &&
+        (currentUserId == userId || User.IsLibraryStaff());
 
     // =========================================================
     // CREATE RESERVATION
@@ -32,6 +44,11 @@ public class ReservationController : ControllerBase
         Console.WriteLine("==========================================");
         Console.WriteLine("[RESERVATION CONTROLLER] CREATE");
 
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
         if (!ModelState.IsValid)
         {
             Console.WriteLine("[RESERVATION CONTROLLER] Invalid request.");
@@ -42,6 +59,19 @@ public class ReservationController : ControllerBase
                 message = "Invalid reservation data.",
                 errors = ModelState
             });
+        }
+
+        // Students reserve for themselves; library staff may reserve for a
+        // patron. A body userId never overrides a student's identity.
+        if (!User.IsLibraryStaff())
+        {
+            if (request.UserId > 0 &&
+                request.UserId != currentUserId)
+            {
+                return Forbid();
+            }
+
+            request.UserId = currentUserId;
         }
 
         Console.WriteLine($"[RESERVATION CONTROLLER] UserId = {request.UserId}");
@@ -96,6 +126,11 @@ public class ReservationController : ControllerBase
     [HttpGet("student/{userId:int}")]
     public async Task<IActionResult> GetMyReservations(int userId)
     {
+        if (!CanAccessUser(userId))
+        {
+            return Forbid();
+        }
+
         Console.WriteLine(
             $"[RESERVATION CONTROLLER] GET reservations for UserId={userId}"
         );
@@ -134,6 +169,33 @@ public class ReservationController : ControllerBase
     [HttpPut("cancel/{reservationId:int}")]
     public async Task<IActionResult> CancelReservation(int reservationId)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        if (!User.IsLibraryStaff())
+        {
+            var reservation = await _context.Reservations
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r =>
+                    r.ReservationId == reservationId);
+
+            if (reservation == null)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = "Reservation not found."
+                });
+            }
+
+            if (reservation.UserId != currentUserId)
+            {
+                return Forbid();
+            }
+        }
+
         Console.WriteLine(
             $"[RESERVATION CONTROLLER] CANCEL ID={reservationId}"
         );
@@ -172,6 +234,7 @@ public class ReservationController : ControllerBase
     //
     // Automatically marks expired reservations.
     // =========================================================
+    [Authorize(Roles = "LibraryAdmin,LibraryStaff,SuperAdmin")]
     [HttpPut("expire")]
     public async Task<IActionResult> ExpireReservations()
     {

@@ -1,9 +1,12 @@
-﻿using CDM_OneServe_API.Services.Library;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Services.Library;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CDM_OneServe_API.Controllers.Library;
 
 [ApiController]
+[Authorize]
 [Route("api/library/access-pass")]
 public class LibraryAccessPassController : ControllerBase
 {
@@ -18,6 +21,16 @@ public class LibraryAccessPassController : ControllerBase
     [HttpGet("{userId}")]
     public async Task<IActionResult> GetAccessPass(int userId)
     {
+        if (!User.TryGetUserId(out var currentUserId))
+        {
+            return Unauthorized();
+        }
+
+        if (currentUserId != userId && !User.IsLibraryStaff())
+        {
+            return Forbid();
+        }
+
         var result = await _accessPassService
             .GetAccessPassAsync(userId);
 

@@ -1,10 +1,13 @@
-﻿using CDM_OneServe_API.Data;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/notifications")]
 public class NotificationController : ControllerBase
 {
@@ -19,21 +22,16 @@ public class NotificationController : ControllerBase
     [HttpGet("{email}")]
     public async Task<IActionResult> GetNotifications(string email)
     {
-        var user = await _context.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Email == email);
-
-        if (user == null)
+        if (!User.TryGetUserId(out var userId))
         {
-            return NotFound(new
-            {
-                message = "User not found."
-            });
+            return Unauthorized();
         }
 
+        // The {email} segment is retained for older clients. The JWT is
+        // the only source of the account whose notifications are read.
         var notifications = await _context.Notifications
             .AsNoTracking()
-            .Where(n => n.UserId == user.Id)
+            .Where(n => n.UserId == userId)
             .OrderByDescending(n => n.CreatedAt)
             .Take(20)
             .Select(n => new
@@ -55,21 +53,14 @@ public class NotificationController : ControllerBase
     [HttpGet("{email}/unread-count")]
     public async Task<IActionResult> GetUnreadCount(string email)
     {
-        var user = await _context.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Email == email);
-
-        if (user == null)
+        if (!User.TryGetUserId(out var userId))
         {
-            return NotFound(new
-            {
-                message = "User not found."
-            });
+            return Unauthorized();
         }
 
         var count = await _context.Notifications
             .CountAsync(n =>
-                n.UserId == user.Id &&
+                n.UserId == userId &&
                 !n.IsRead
             );
 
@@ -84,23 +75,17 @@ public class NotificationController : ControllerBase
     [HttpPut("{id:int}/read")]
     public async Task<IActionResult> MarkAsRead(
         int id,
-        [FromQuery] string email)
+        [FromQuery] string? email = null)
     {
-        var user = await _context.Users
-            .FirstOrDefaultAsync(u => u.Email == email);
-
-        if (user == null)
+        if (!User.TryGetUserId(out var userId))
         {
-            return NotFound(new
-            {
-                message = "User not found."
-            });
+            return Unauthorized();
         }
 
         var notification = await _context.Notifications
             .FirstOrDefaultAsync(n =>
                 n.Id == id &&
-                n.UserId == user.Id
+                n.UserId == userId
             );
 
         if (notification == null)
@@ -125,22 +110,16 @@ public class NotificationController : ControllerBase
     // PUT: /api/notifications/mark-all-read?email=...
     [HttpPut("mark-all-read")]
     public async Task<IActionResult> MarkAllAsRead(
-        [FromQuery] string email)
+        [FromQuery] string? email = null)
     {
-        var user = await _context.Users
-            .FirstOrDefaultAsync(u => u.Email == email);
-
-        if (user == null)
+        if (!User.TryGetUserId(out var userId))
         {
-            return NotFound(new
-            {
-                message = "User not found."
-            });
+            return Unauthorized();
         }
 
         var notifications = await _context.Notifications
             .Where(n =>
-                n.UserId == user.Id &&
+                n.UserId == userId &&
                 !n.IsRead
             )
             .ToListAsync();

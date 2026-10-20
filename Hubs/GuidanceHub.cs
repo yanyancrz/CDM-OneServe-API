@@ -1,7 +1,10 @@
 using System.Security.Claims;
 
+using CDM_OneServe_API.Data;
+
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 
 namespace CDM_OneServe_API.Hubs;
 
@@ -14,6 +17,13 @@ namespace CDM_OneServe_API.Hubs;
 [Authorize]
 public class GuidanceHub : Hub
 {
+    private readonly AppDbContext _context;
+
+    public GuidanceHub(AppDbContext context)
+    {
+        _context = context;
+    }
+
     public override async Task OnConnectedAsync()
     {
         if (TryUserId(Context.User, out var id))
@@ -22,8 +32,27 @@ public class GuidanceHub : Hub
         await base.OnConnectedAsync();
     }
 
-    public Task JoinConversation(int conversationId) =>
-        Groups.AddToGroupAsync(Context.ConnectionId, $"convo:{conversationId}");
+    public async Task JoinConversation(int conversationId)
+    {
+        if (!TryUserId(Context.User, out var userId))
+            throw new HubException("You must be signed in.");
+
+        // A conversation is only ever between one student and one counselor.
+        // Never trust the client's conversation id without checking that
+        // this connection belongs to one of the two participants.
+        var isParticipant = await _context.GuidanceChatConversations
+            .AsNoTracking()
+            .AnyAsync(c =>
+                c.Id == conversationId &&
+                (c.StudentId == userId || c.CounselorId == userId));
+
+        if (!isParticipant)
+            throw new HubException("You are not a participant in this conversation.");
+
+        await Groups.AddToGroupAsync(
+            Context.ConnectionId,
+            $"convo:{conversationId}");
+    }
 
     public Task LeaveConversation(int conversationId) =>
         Groups.RemoveFromGroupAsync(Context.ConnectionId, $"convo:{conversationId}");

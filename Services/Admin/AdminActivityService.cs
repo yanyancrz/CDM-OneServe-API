@@ -15,19 +15,11 @@ public class AdminActivityService
     }
 
     public async Task<List<AdminActivityLogDto>> GetActivitiesAsync(
-        string email)
+        int userId)
     {
-        var user = await _context.Users
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Email == email);
-
-        if (user == null)
-        {
-            return new List<AdminActivityLogDto>();
-        }
-
         return await _context.AdminActivityLogs
-            .Where(x => x.UserId == user.Id)
+            .AsNoTracking()
+            .Where(x => x.UserId == userId)
             .OrderByDescending(x => x.Timestamp)
             .Take(50)
             .Select(x => new AdminActivityLogDto

@@ -1,4 +1,5 @@
-﻿using CDM_OneServe_API.Data;
+﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Admin;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,11 +21,11 @@ public class AdminProfileService
     // ============================
     // GET ADMIN PROFILE
     // ============================
-    public async Task<AdminProfileDto?> GetProfileAsync(string email)
+    public async Task<AdminProfileDto?> GetProfileAsync(int userId)
     {
         var user = await _context.Users
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Email == email);
+            .FirstOrDefaultAsync(x => x.Id == userId);
 
         if (user == null)
         {
@@ -48,11 +49,11 @@ public class AdminProfileService
     // UPDATE ADMIN PROFILE
     // ============================
     public async Task<AdminProfileDto?> UpdateProfileAsync(
-        string email,
+        int userId,
         UpdateAdminProfileRequest request)
     {
         var user = await _context.Users
-            .FirstOrDefaultAsync(x => x.Email == email);
+            .FirstOrDefaultAsync(x => x.Id == userId);
 
         if (user == null)
         {
@@ -86,10 +87,12 @@ public class AdminProfileService
     // CHANGE ADMIN PASSWORD
     // ============================
     public async Task<(bool Success, string Message)> ChangePasswordAsync(
-        ChangeAdminPasswordRequest request)
+        int userId,
+        ChangeAdminPasswordRequest request,
+        DateTime? currentTokenIssuedAt = null)
     {
         var user = await _context.Users
-            .FirstOrDefaultAsync(x => x.Email == request.Email);
+            .FirstOrDefaultAsync(x => x.Id == userId);
 
         if (user == null)
         {
@@ -127,6 +130,10 @@ public class AdminProfileService
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(
             request.NewPassword
         );
+
+        // End every session issued before this one; the caller's own token
+        // is kept alive by stamping just before its iat.
+        TokenRevocation.Stamp(user, currentTokenIssuedAt);
 
         await _context.SaveChangesAsync();
 

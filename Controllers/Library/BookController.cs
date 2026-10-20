@@ -1,5 +1,6 @@
 ﻿using CDM_OneServe_API.DTOs.Admin.Library;
 using CDM_OneServe_API.Services.Library;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CDM_OneServe_API.Controllers.Library;
@@ -62,6 +63,7 @@ public class BooksController : ControllerBase
     // CREATE BOOK
     // POST: api/library/books
     // =========================================================
+    [Authorize(Roles = "LibraryAdmin,LibraryStaff,SuperAdmin")]
     [HttpPost]
     public async Task<IActionResult> CreateBook(
         [FromBody] CreateBookDto dto)
@@ -91,6 +93,7 @@ public class BooksController : ControllerBase
     // UPDATE BOOK
     // PUT: api/library/books/{bookId}
     // =========================================================
+    [Authorize(Roles = "LibraryAdmin,LibraryStaff,SuperAdmin")]
     [HttpPut("{bookId:int}")]
     public async Task<IActionResult> UpdateBook(
         int bookId,
@@ -124,6 +127,7 @@ public class BooksController : ControllerBase
     // DELETE BOOK
     // DELETE: api/library/books/{bookId}
     // =========================================================
+    [Authorize(Roles = "LibraryAdmin,LibraryStaff,SuperAdmin")]
     [HttpDelete("{bookId:int}")]
     public async Task<IActionResult> DeleteBook(int bookId)
     {

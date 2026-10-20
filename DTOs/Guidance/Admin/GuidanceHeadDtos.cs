@@ -111,6 +111,7 @@ public class GuidanceCounselorListItemDto
     public string IdNumber { get; set; } = "";
     public string FullName { get; set; } = "";
     public string Email { get; set; } = "";
+    public string? ProfilePicture { get; set; }
     public string AccountStatus { get; set; } = "";
     public string? Title { get; set; }
     public string? Room { get; set; }
