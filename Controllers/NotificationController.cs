@@ -1,5 +1,6 @@
 ﻿using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.Data;
+using CDM_OneServe_API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -29,7 +30,7 @@ public class NotificationController : ControllerBase
 
         // The {email} segment is retained for older clients. The JWT is
         // the only source of the account whose notifications are read.
-        var notifications = await _context.Notifications
+        var rows = await _context.Notifications
             .AsNoTracking()
             .Where(n => n.UserId == userId)
             .OrderByDescending(n => n.CreatedAt)
@@ -44,6 +45,22 @@ public class NotificationController : ControllerBase
                 createdAt = n.CreatedAt
             })
             .ToListAsync();
+
+        // This table is shared. Guidance and Library rows are UTC wall clocks,
+        // while the Lost & Found mirror copies that module's PH wall clocks.
+        // Attach the right kind to each so the JSON carries an unambiguous
+        // instant. No stored value is changed.
+        var notifications = rows.Select(n => new
+        {
+            n.id,
+            n.title,
+            n.message,
+            n.type,
+            n.isRead,
+            createdAt = n.type.StartsWith("LOSTFOUND_", StringComparison.OrdinalIgnoreCase)
+                ? UtcTimestamps.FromPhWallClock(n.createdAt)
+                : UtcTimestamps.FromDatabase(n.createdAt)
+        });
 
         return Ok(notifications);
     }

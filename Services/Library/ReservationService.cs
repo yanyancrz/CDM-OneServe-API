@@ -103,6 +103,7 @@ public class ReservationService
         bool alreadyBorrowed = await _context.BorrowTransactions.AnyAsync(b =>
             b.UserId == userId &&
             b.BookId == bookId &&
+            b.ReturnDate == null &&
             b.Status == "Borrowed");
 
         if (alreadyBorrowed)
@@ -167,12 +168,22 @@ public class ReservationService
             CreatedAt = now
         });
 
-        await PushAsync(
-            userId,
-            "reservation-created",
-            "Book Reserved",
-            $"Your reservation for '{book.Title}' has been created successfully.",
-            $"reservationcreated:{bookId}:{userId}");
+        // Push is best-effort. A missing push table or a push-service
+        // outage must never turn a successful reservation into a 500.
+        try
+        {
+            await PushAsync(
+                userId,
+                "reservation-created",
+                "Book Reserved",
+                $"Your reservation for '{book.Title}' has been created successfully.",
+                $"reservationcreated:{bookId}:{userId}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"[RESERVATION] Push enqueue failed (non-fatal): {ex.Message}");
+        }
 
         await _context.SaveChangesAsync();
 
@@ -481,6 +492,22 @@ public class ReservationService
             response.Message =
                 "No available copies for this book.";
 
+            return response;
+        }
+
+        // =====================================================
+        // UNRESOLVED DAMAGED RETURN
+        // A damaged copy must be replaced or settled before any
+        // reserved book can be claimed.
+        // =====================================================
+
+        var damagedBlock = await LibraryBorrowBlock.GetBlockMessageAsync(
+            _context, reservation.UserId);
+
+        if (damagedBlock != null)
+        {
+            response.Success = false;
+            response.Message = damagedBlock;
             return response;
         }
 

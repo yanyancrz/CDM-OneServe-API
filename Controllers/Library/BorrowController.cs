@@ -139,9 +139,10 @@ public class BorrowController : ControllerBase
     // ============================
     [Authorize(Roles = "LibraryAdmin,LibraryStaff,SuperAdmin")]
     [HttpPut("return/{borrowId}")]
-    public async Task<IActionResult> ReturnBook(int borrowId)
+    public async Task<IActionResult> ReturnBook(
+        int borrowId, [FromQuery] string? condition = null)
     {
-        var result = await _borrowService.ReturnBookAsync(borrowId);
+        var result = await _borrowService.ReturnBookAsync(borrowId, condition);
 
         if (!result.Success)
             return BadRequest(result);
@@ -201,6 +202,23 @@ public class BorrowController : ControllerBase
         }
 
         var result = await _borrowService.GetCurrentBorrowedBooksAsync(userId);
+
+        return Ok(result);
+    }
+
+    // ============================
+    // GET: api/library/borrow/damaged/5
+    // Open damaged-book obligations for the patron.
+    // ============================
+    [HttpGet("damaged/{userId}")]
+    public async Task<IActionResult> GetDamagedReturns(int userId)
+    {
+        if (!CanAccessUser(userId))
+        {
+            return Forbid();
+        }
+
+        var result = await _borrowService.GetDamagedReturnsAsync(userId);
 
         return Ok(result);
     }

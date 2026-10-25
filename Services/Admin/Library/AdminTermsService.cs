@@ -30,6 +30,10 @@ public class AdminTermsService : IAdminTermsService
         ("loan-duration", "Loan Duration",
             $"Books are lent for {LibraryDefaults.DefaultLoanDays} days by default. " +
             "The borrower may be given 3, 7, or 14 days at the counter."),
+        ("inside-library-use", "Inside Library Use",
+            "When only one copy of a title remains available, that copy may be used inside the library only. " +
+            "It must be used during library hours, 8:00 AM to 5:00 PM, and returned to the counter before " +
+            "closing on the same day. The 3, 7, or 14-day home loan period does not apply to this copy."),
         ("renewal-policies", "Renewal Policies",
             "A book may be renewed if no other patron has reserved it and it is not overdue. Ask the librarian at the counter."),
         ("overdue-penalty", "Overdue Penalty",
@@ -62,12 +66,26 @@ public class AdminTermsService : IAdminTermsService
 
     public async Task<List<LibraryTermDto>> GetAsync(CancellationToken cancellationToken)
     {
-        if (!await _db.LibraryTerms.AnyAsync(cancellationToken))
+        var existing = await _db.LibraryTerms.AsNoTracking()
+            .OrderBy(t => t.SortOrder)
+            .ToListAsync(cancellationToken);
+
+        var existingKeys = existing
+            .Select(t => t.TermKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Seed the defaults on a new install, and add any new section (for
+        // example, Inside Library Use) to a database that was seeded before.
+        var missing = Defaults()
+            .Where(item => !existingKeys.Contains(item.Key))
+            .ToList();
+
+        if (missing.Count > 0)
         {
             var now = DateTime.Now;
-            var order = 0;
+            var order = existing.Count == 0 ? 0 : existing.Max(t => t.SortOrder);
 
-            foreach (var (key, title, content) in Defaults())
+            foreach (var (key, title, content) in missing)
                 _db.LibraryTerms.Add(new LibraryTerm
                 {
                     TermKey = key,

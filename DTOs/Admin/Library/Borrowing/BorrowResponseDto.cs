@@ -19,6 +19,10 @@ public class BorrowResponseDto
     public DateTime DueDate { get; set; }
     public int LoanDays { get; set; }
 
+    // True when the book must stay inside the library and is due back at
+    // 5:00 PM on the same day.
+    public bool IsInsideLibraryOnly { get; set; }
+
     public int RemainingSlots { get; set; }
     public string ProcessedBy { get; set; } = string.Empty;
 }

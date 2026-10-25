@@ -1209,7 +1209,7 @@ public class ProfileController : ControllerBase
             UserId = user.Id,
             Action = "Changed password",
             Description = "You changed your account password.",
-            CreatedAt = DateTime.Now
+            CreatedAt = DateTime.UtcNow
         });
 
         LogAdmin(

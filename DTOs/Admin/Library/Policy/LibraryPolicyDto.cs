@@ -39,4 +39,8 @@ public class LibraryPolicyTermDto
     public string? Title { get; set; }
 
     public string Content { get; set; } = string.Empty;
+
+    // Used by the app to decide when the terms gate must show again after
+    // the Library Head edits any section.
+    public DateTime UpdatedAt { get; set; }
 }

@@ -26,6 +26,9 @@ public class BorrowTransactionDto
 
     public string? Remarks { get; set; }
 
+    // Good | Damaged | Lost (set once the loan is returned).
+    public string? ReturnCondition { get; set; }
+
     public int OverdueDays { get; set; }
 
     public int MaxRenewals { get; set; }

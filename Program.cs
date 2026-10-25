@@ -100,6 +100,7 @@ builder.Services.AddScoped<IAdminLibraryFacultyService, AdminLibraryFacultyServi
 builder.Services.AddScoped<IAdminBorrowingService, AdminBorrowingService>();
 builder.Services.AddScoped<IAdminReservationService, AdminReservationService>();
 builder.Services.AddScoped<IAdminReturnService, AdminReturnService>();
+builder.Services.AddScoped<IAdminDamagedReturnService, AdminDamagedReturnService>();
 builder.Services.AddScoped<IAdminReportService, AdminReportService>();
 builder.Services.AddScoped<IAdminLibrarianService, AdminLibrarianService>();
 builder.Services.AddScoped<IAdminSettingsService, AdminSettingsService>();

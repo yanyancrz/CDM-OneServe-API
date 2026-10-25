@@ -19,6 +19,11 @@ public class ReturnResultDto
 
     public string Condition { get; set; } = string.Empty;
 
+    // Set only when the copy came back Damaged: the date the patron must
+    // return or replace it. The library can change it on the Damaged
+    // Returns page.
+    public DateTime? ReplacementDueDate { get; set; }
+
     public bool CopyReturnedToShelf { get; set; }
     public string ProcessedBy { get; set; } = string.Empty;
 }

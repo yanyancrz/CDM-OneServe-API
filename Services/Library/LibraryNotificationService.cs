@@ -15,7 +15,7 @@ namespace CDM_OneServe_API.Services.Library
 
         public async Task<List<LibraryNotificationDto>> GetNotificationsAsync(int userId)
         {
-            return await _context.LibraryNotifications
+            var notifications = await _context.LibraryNotifications
                 .Where(n => n.UserId == userId)
                 .OrderByDescending(n => n.CreatedAt)
                 .Select(n => new LibraryNotificationDto
@@ -28,6 +28,16 @@ namespace CDM_OneServe_API.Services.Library
                     Read = n.IsRead
                 })
                 .ToListAsync();
+
+            // Stored as UTC but read back from DATETIME as Unspecified.
+            // Mark it so the API emits an unambiguous instant.
+            foreach (var notification in notifications)
+            {
+                notification.CreatedAt =
+                    UtcTimestamps.FromDatabase(notification.CreatedAt);
+            }
+
+            return notifications;
         }
 
         public async Task<bool> MarkAsReadAsync(int notificationId)

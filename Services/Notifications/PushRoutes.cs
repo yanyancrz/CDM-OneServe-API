@@ -103,6 +103,8 @@ public static class PushRoutes
             "library:borrow-claim-ready" => LibraryLoans,
             "library:borrow-approved" => LibraryLoans,
             "library:book-returned" => LibraryLoans,
+            "library:book-damaged" => LibraryLoans,
+            "library:book-lost" => LibraryLoans,
             "library:due-soon" => LibraryLoans,
             "library:overdue" => LibraryLoans,
             "library:new-copy" => LibraryBooks,

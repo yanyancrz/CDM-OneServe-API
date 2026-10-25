@@ -37,9 +37,11 @@ public class UserSession
     /// <summary>Remote address of the login, when the proxy exposed one.</summary>
     public string? IpAddress { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.Now;
+    // UTC, like the column it maps to. DateTime.UtcNow rather than Now so the
+    // stored value never depends on the host's timezone setting.
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    public DateTime LastSeenAt { get; set; } = DateTime.Now;
+    public DateTime LastSeenAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>
     /// True once the user has answered "sign out everywhere else". Kept as a

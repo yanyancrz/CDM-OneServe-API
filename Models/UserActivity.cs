@@ -23,5 +23,7 @@ public class UserActivity
 
     public string? Description { get; set; }
 
-    public DateTime CreatedAt { get; set; } = DateTime.Now;
+    // UTC. Guidance Head reads MAX(CreatedAt) as "last login", so this value
+    // is surfaced directly to the admin UI.
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

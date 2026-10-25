@@ -7,4 +7,8 @@ public class ClaimReservationDto
     public int? LoanDays { get; set; }
 
     public bool AcceptedTerms { get; set; }
+
+    // True when the librarian chooses inside-library use. The server also
+    // forces this automatically when no other copy is left on the shelf.
+    public bool InsideLibraryOnly { get; set; }
 }

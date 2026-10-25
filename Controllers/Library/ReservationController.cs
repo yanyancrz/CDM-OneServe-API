@@ -105,14 +105,16 @@ public class ReservationController : ControllerBase
         {
             Console.WriteLine("==========================================");
             Console.WriteLine("[RESERVATION CONTROLLER] ERROR");
-            Console.WriteLine(ex.Message);
-            Console.WriteLine(ex.InnerException?.Message);
+            Console.WriteLine(ex.ToString());
             Console.WriteLine("==========================================");
 
             return StatusCode(500, new
             {
                 success = false,
-                message = "An error occurred while creating the reservation.",
+                // Temporary: keep the detail visible while diagnosing the
+                // production 500. Revert to the generic message afterwards.
+                message =
+                    $"An error occurred while creating the reservation. [{ex.Message}]",
                 error = ex.Message
             });
         }

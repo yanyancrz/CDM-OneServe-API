@@ -643,7 +643,7 @@ public class AuthController : ControllerBase
                 UserId = user.Id,
                 Action = UserActivityActions.Login,
                 Description = activityDescription,
-                CreatedAt = DateTime.Now
+                CreatedAt = DateTime.UtcNow
             });
 
             _context.UserSessions.Add(new UserSession
@@ -657,8 +657,8 @@ public class AuthController : ControllerBase
                 IpAddress = Request.Headers["X-Forwarded-For"].ToString() is { Length: > 0 } fwd
                     ? fwd.Split(',')[0].Trim()[..Math.Min(fwd.Split(',')[0].Trim().Length, 64)]
                     : null,
-                CreatedAt = DateTime.Now,
-                LastSeenAt = DateTime.Now
+                CreatedAt = DateTime.UtcNow,
+                LastSeenAt = DateTime.UtcNow
             });
 
             await _context.SaveChangesAsync();
@@ -911,7 +911,7 @@ public class AuthController : ControllerBase
             UserId = user.Id,
             Action = "Reset password",
             Description = "You reset your account password.",
-            CreatedAt = DateTime.Now
+            CreatedAt = DateTime.UtcNow
         });
 
         _context.PasswordResetOTPs.Remove(otpRecord);

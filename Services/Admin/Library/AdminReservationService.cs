@@ -7,6 +7,7 @@ using CDM_OneServe_API.DTOs.Admin.Library.Reservations;
 using CDM_OneServe_API.Interfaces.Admin.Library;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
+using CDM_OneServe_API.Services.Library;
 using CDM_OneServe_API.Services.Notifications;
 
 using Microsoft.EntityFrameworkCore;
@@ -95,6 +96,9 @@ public class AdminReservationService : IAdminReservationService
         item.DisplayStatus = expired ? ReservationStatuses.Expired : row.Status;
         item.IsExpired = expired || row.Status == ReservationStatuses.Expired;
         item.HoldsCopy = holdsCopy;
+        item.WillBeInsideUse = holdsCopy
+            ? row.AvailableCopies <= 0
+            : row.AvailableCopies <= 1;
 
         item.CanApprove = open && row.Status == ReservationStatuses.Pending;
         item.CanMarkReady = open && ReservationStatuses.AwaitingAction.Contains(row.Status) && row.AvailableCopies > 0;
@@ -277,6 +281,10 @@ public class AdminReservationService : IAdminReservationService
         // Same rules as the Borrow page (Part 7).
         var reason = AdminBorrowingService.CheckEligibility(patron, activeLoans, limit);
 
+        // An unresolved damaged return blocks claiming and holding a copy.
+        reason ??= await LibraryBorrowBlock.GetBlockMessageAsync(
+            _db, patron.Id, cancellationToken);
+
         details.PatronEmail = patron.Email;
         details.Course = patron.Course;
         details.YearLevel = patron.YearLevel;
@@ -377,6 +385,10 @@ public class AdminReservationService : IAdminReservationService
             .CountAsync(t => t.UserId == patron.Id && t.ReturnDate == null, cancellationToken);
 
         var reason = AdminBorrowingService.CheckEligibility(patron, activeLoans, limit);
+
+        reason ??= await LibraryBorrowBlock.GetBlockMessageAsync(
+            _db, patron.Id, cancellationToken);
+
         if (reason != null)
             return Fail(409, $"{reason} Reject the reservation or wait until the patron can borrow.");
 
@@ -530,10 +542,26 @@ public class AdminReservationService : IAdminReservationService
 
         var book = await _db.Books.AsNoTracking()
             .Where(b => b.BookId == res.BookId)
-            .Select(b => new { b.BookId, b.Title, b.Author, b.ISBN, b.CallNo })
+            .Select(b => new
+            {
+                b.BookId,
+                b.Title,
+                b.Author,
+                b.ISBN,
+                b.CallNo,
+                b.AvailableCopies
+            })
             .FirstOrDefaultAsync(cancellationToken);
 
         if (book == null) return ClaimFail(404, "Book not found.");
+
+        // A ReadyForPickup reservation already took its copy off the shelf, so
+        // zero available copies means this is the last one. For every other
+        // status, the claim itself will take the last copy when only one is left.
+        var insideUse = dto.InsideLibraryOnly ||
+            (ReservationStatuses.HoldsCopy(res.Status)
+                ? book.AvailableCopies <= 0
+                : book.AvailableCopies <= 1);
 
         // Anything that returns or throws after this point rolls the transaction back.
         await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
@@ -544,6 +572,10 @@ public class AdminReservationService : IAdminReservationService
             .CountAsync(t => t.UserId == patron.Id && t.ReturnDate == null, cancellationToken);
 
         var reason = AdminBorrowingService.CheckEligibility(patron, activeLoans, limit);
+
+        reason ??= await LibraryBorrowBlock.GetBlockMessageAsync(
+            _db, patron.Id, cancellationToken);
+
         if (reason != null) return ClaimFail(409, reason);
 
         if (await _db.BorrowTransactions.AnyAsync(
@@ -559,7 +591,9 @@ public class AdminReservationService : IAdminReservationService
             !await LibraryStock.TryHoldCopyAsync(_db, book.BookId, now, cancellationToken))
             return ClaimFail(409, "No copy of this book is available right now.");
 
-        var due = AdminBorrowingService.DueDateFor(now, loanDays);
+        var due = insideUse
+            ? AdminBorrowingService.InsideUseDueDate(now)
+            : AdminBorrowingService.DueDateFor(now, loanDays);
 
         var loan = new BorrowTransaction
         {
@@ -569,7 +603,9 @@ public class AdminReservationService : IAdminReservationService
             DueDate = due,
             Status = "Borrowed",
             RenewalCount = 0,
-            Remarks = $"From reservation #{res.ReservationId}",
+            Remarks = insideUse
+                ? LibraryLoanFlags.WithInsideUse($"From reservation #{res.ReservationId}")
+                : $"From reservation #{res.ReservationId}",
             CreatedAt = now
         };
 
@@ -586,14 +622,19 @@ public class AdminReservationService : IAdminReservationService
             CreatedAt = now
         });
 
+        var returnNote = insideUse
+            ? $"This is the last copy, so it is for inside-library use only. Return it to the counter before 5:00 PM today ({Day(due)})."
+            : $"Please return it by {Day(due)}.";
+
         Notify(patron.Id, "reservation-claimed", "Book Claimed",
-            $"You claimed your reserved book '{book.Title}'. Please return it by {Day(due)}.", now);
+            $"You claimed your reserved book '{book.Title}'. {returnNote}", now);
 
         await PushNotifyAsync(patron.Id, id, "reservation-claimed", "Book Claimed",
-            $"You claimed your reserved book '{book.Title}'. Please return it by {Day(due)}.", cancellationToken);
+            $"You claimed your reserved book '{book.Title}'. {returnNote}", cancellationToken);
 
         _activity.Add(staffId, "LIBRARY_RESERVATION_CLAIMED",
-            $"issued reserved book \"{book.Title}\" to {patron.FullName}");
+            $"issued reserved book \"{book.Title}\" to {patron.FullName}" +
+            (insideUse ? " (inside library use only)" : string.Empty));
 
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -626,7 +667,8 @@ public class AdminReservationService : IAdminReservationService
             CallNo = book.CallNo,
             BorrowDate = now,
             DueDate = due,
-            LoanDays = loanDays,
+            LoanDays = insideUse ? 0 : loanDays,
+            IsInsideLibraryOnly = insideUse,
             RemainingSlots = Math.Max(0, limit - (activeLoans + 1)),
             ProcessedBy = staffName
         }, 201);

@@ -2,6 +2,7 @@
 
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Admin.Library;
+using CDM_OneServe_API.DTOs.Admin.Library.Returns;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
 using CDM_OneServe_API.Services.Admin.Library;
@@ -122,6 +123,24 @@ public class LibraryScannerService
         var borrowLimit = GetBorrowLimit(user);
 
         // ==========================================
+        // UNRESOLVED DAMAGED RETURNS
+        // ==========================================
+        var openDamaged = await LibraryBorrowBlock.GetOpenDamagedReturnsAsync(
+            _context, user.Id);
+        var damagedBooks = openDamaged.Select(d => new ScanDamagedReturnDto
+        {
+            TransactionId = d.TransactionId,
+            BookId = d.BookId,
+            BookTitle = d.BookTitle,
+            Author = d.Author,
+            CoverImage = d.CoverImage,
+            ReturnDate = d.ReturnDate,
+            ReplacementDueDate = d.ReplacementDueDate,
+            IsOverdue = d.IsOverdue,
+            DaysLeft = d.DaysLeft
+        }).ToList();
+
+        // ==========================================
         // ACTIVE RESERVATIONS (para sa Claim button)
         // Reserved / Pending / Approved / ReadyForPickup at hindi pa expired
         // ==========================================
@@ -150,6 +169,11 @@ public class LibraryScannerService
                     (r.Status == ReservationStatuses.ReadyForPickup || r.Book.AvailableCopies > 0)
             })
             .ToListAsync();
+
+        if (damagedBooks.Count > 0)
+        {
+            foreach (var r in reservedBooks) r.CanClaim = false;
+        }
 
         Console.WriteLine(
             $"[SCANNER v3] active reservations = {reservedBooks.Count}");
@@ -190,14 +214,13 @@ public class LibraryScannerService
         {
             return CreateResult(user, false, 0, borrowLimit,
                 "Not Verified", "Account is not verified.",
-                reservedBooks, activeLoans);
-        }
+                reservedBooks, activeLoans, damagedBooks);        }
 
         if (!user.IsProfileComplete)
         {
             return CreateResult(user, false, 0, borrowLimit,
                 "Incomplete Profile", "Account profile is incomplete.",
-                reservedBooks, activeLoans);
+                reservedBooks, activeLoans, damagedBooks);
         }
 
         // The database uses "Approved"; the admin screens use "Active".
@@ -213,7 +236,7 @@ public class LibraryScannerService
             return CreateResult(user, false, 0, borrowLimit,
                 string.IsNullOrEmpty(status) ? "Unknown" : status,
                 $"Account is not active (status: {status}).",
-                reservedBooks, activeLoans);
+                reservedBooks, activeLoans, damagedBooks);
         }
 
         // A late return suspends borrowing for the rest of the semester.
@@ -222,7 +245,7 @@ public class LibraryScannerService
             return CreateResult(user, false, 0, borrowLimit,
                 "Borrowing Suspended",
                 $"Borrowing is suspended for this semester (until {user.BorrowBanUntil:MMM d, yyyy}).",
-                reservedBooks, activeLoans);
+                reservedBooks, activeLoans, damagedBooks);
         }
 
         // ==========================================
@@ -239,20 +262,32 @@ public class LibraryScannerService
         var remainingBooks =
             Math.Max(0, borrowLimit - activeBorrowedBooks);
 
+        // ==========================================
+        // UNRESOLVED DAMAGED RETURN BLOCK
+        // ==========================================
+        if (damagedBooks.Count > 0)
+        {
+            return CreateResult(user, false, activeBorrowedBooks, borrowLimit,
+                "Damaged Book Unresolved",
+                LibraryBorrowBlock.BuildMessage(openDamaged) ??
+                    "Borrowing is blocked until the damaged copy is replaced or settled.",
+                reservedBooks, activeLoans, damagedBooks);
+        }
+
         if (activeBorrowedBooks >= borrowLimit)
         {
             return CreateResult(user, false, activeBorrowedBooks, borrowLimit,
                 "Borrowing Limit Reached",
                 $"Borrowing limit reached. " +
                 $"{activeBorrowedBooks}/{borrowLimit} books currently borrowed.",
-                reservedBooks, activeLoans);
+                reservedBooks, activeLoans, damagedBooks);
         }
 
         return CreateResult(user, true, activeBorrowedBooks, borrowLimit,
             "Cleared",
             $"Account is cleared for borrowing. " +
             $"{remainingBooks} borrowing slot(s) remaining.",
-            reservedBooks, activeLoans);
+            reservedBooks, activeLoans, damagedBooks);
     }
 
     // ==========================================
@@ -328,9 +363,10 @@ public class LibraryScannerService
         string status,
         string message,
         List<ScanReservationDto>? reservedBooks = null,
-        List<ScanLoanDto>? activeLoans = null)
+        List<ScanLoanDto>? activeLoans = null,
+        List<ScanDamagedReturnDto>? damagedReturns = null)
     {
-        return new LibraryScanResultDto
+        var result = new LibraryScanResultDto
         {
             Cleared = cleared,
             UserId = user.Id,
@@ -344,7 +380,17 @@ public class LibraryScannerService
             Status = status,
             Message = message,
             ReservedBooks = reservedBooks ?? new(),
-            ActiveLoans = activeLoans ?? new()
+            ActiveLoans = activeLoans ?? new(),
+            DamagedReturns = damagedReturns ?? new()
         };
+
+        // Never let a not-cleared patron claim a reserved book.
+        if (!cleared)
+        {
+            foreach (var r in result.ReservedBooks)
+                r.CanClaim = false;
+        }
+
+        return result;
     }
 }

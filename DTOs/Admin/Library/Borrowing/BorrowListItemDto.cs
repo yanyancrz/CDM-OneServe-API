@@ -13,5 +13,6 @@ public class BorrowListItemDto
     public DateTime DueDate { get; set; }
     public DateTime? ReturnDate { get; set; }
     public string Status { get; set; } = string.Empty; // Borrowed | Overdue | Returned
+    public bool IsInsideLibraryOnly { get; set; }
     public int OverdueDays { get; set; }
 }

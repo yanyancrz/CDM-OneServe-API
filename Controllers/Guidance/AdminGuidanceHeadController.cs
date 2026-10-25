@@ -7,6 +7,7 @@ using CDM_OneServe_API.DTOs.Guidance.Admin;
 using CDM_OneServe_API.Services.Guidance;
 
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -40,10 +41,12 @@ namespace CDM_OneServe_API.Controllers.Guidance;
 public class AdminGuidanceHeadController : ControllerBase
 {
     private readonly AdminGuidanceHeadService _service;
+    private readonly IWebHostEnvironment _env;
 
-    public AdminGuidanceHeadController(AdminGuidanceHeadService service)
+    public AdminGuidanceHeadController(AdminGuidanceHeadService service, IWebHostEnvironment env)
     {
         _service = service;
+        _env = env;
     }
 
     // --------------------------------------------------
@@ -131,6 +134,70 @@ public class AdminGuidanceHeadController : ControllerBase
     [HttpGet("reports/overview")]
     public async Task<IActionResult> GetReports([FromQuery] int days = 30, CancellationToken ct = default) =>
         Ok(ApiResponse.Ok(await _service.GetReportsAsync(days, ct)));
+
+    // --------------------------------------------------
+    // NARRATIVE REPORT REPOSITORY
+    // --------------------------------------------------
+    [HttpGet("reports/narrative")]
+    public IActionResult GetNarrativeReports()
+    {
+        var dir = GetNarrativeDir();
+        Directory.CreateDirectory(dir);
+        var files = Directory.GetFiles(dir)
+            .Select(f => new FileInfo(f))
+            .Select(fi => new
+            {
+                id = fi.Name,
+                name = fi.Name,
+                size = fi.Length,
+                uploadedAt = fi.CreationTimeUtc,
+                url = "/uploads/guidance-reports/" + fi.Name,
+            })
+            .OrderByDescending(f => f.uploadedAt)
+            .ToList();
+        return Ok(ApiResponse.Ok(files));
+    }
+
+    [HttpPost("reports/narrative")]
+    public async Task<IActionResult> UploadNarrativeReport(IFormFile file, CancellationToken ct)
+    {
+        if (file == null || file.Length == 0) return BadRequest(ApiResponse.Fail("No file uploaded."));
+
+        var dir = GetNarrativeDir();
+        Directory.CreateDirectory(dir);
+
+        var safeName = Path.GetFileName(file.FileName);
+        var storedName = Guid.NewGuid().ToString("N") + "_" + safeName;
+        var path = Path.Combine(dir, storedName);
+
+        await using (var stream = System.IO.File.Create(path))
+        {
+            await file.CopyToAsync(stream, ct);
+        }
+
+        var fi = new FileInfo(path);
+        return Ok(ApiResponse.Ok(new
+        {
+            id = fi.Name,
+            name = safeName,
+            size = fi.Length,
+            uploadedAt = fi.CreationTimeUtc,
+            url = "/uploads/guidance-reports/" + fi.Name,
+        }, "Uploaded."));
+    }
+
+    [HttpDelete("reports/narrative/{id}")]
+    public IActionResult DeleteNarrativeReport(string id)
+    {
+        var dir = GetNarrativeDir();
+        var path = Path.Combine(dir, Path.GetFileName(id));
+        if (!System.IO.File.Exists(path)) return NotFound(ApiResponse.Fail("File not found."));
+        System.IO.File.Delete(path);
+        return Ok(ApiResponse.Ok<object?>(null, "Deleted."));
+    }
+
+    private string GetNarrativeDir() =>
+        Path.Combine(_env.WebRootPath ?? _env.ContentRootPath, "uploads", "guidance-reports");
 
     // --------------------------------------------------
     // SETTINGS

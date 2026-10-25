@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.Models;
+using CDM_OneServe_API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -72,7 +73,7 @@ public class UserSessionController : ControllerBase
             });
         }
 
-        var since = DateTime.Now - Lookback;
+        var since = DateTime.UtcNow - Lookback;
 
         // Anything newer than THIS device, from a different key.
         var others = await _context.UserSessions.AsNoTracking()
@@ -90,7 +91,7 @@ public class UserSessionController : ControllerBase
         await _context.UserSessions
             .Where(s => s.SessionKey == key)
             .ExecuteUpdateAsync(setters => setters
-                .SetProperty(s => s.LastSeenAt, DateTime.Now), ct);
+                .SetProperty(s => s.LastSeenAt, DateTime.UtcNow), ct);
 
         return Ok(new
         {
@@ -99,7 +100,11 @@ public class UserSessionController : ControllerBase
             hasOtherDevice = others.Count > 0,
             otherDeviceCount = others.Count,
             otherDeviceLabel = latest?.DeviceLabel ?? "another device",
-            otherDeviceAt = latest?.CreatedAt,
+            // DATETIME has no zone. Mark the stored UTC value as UTC so the
+            // browser receives "...Z" instead of guessing it is local time.
+            otherDeviceAt = latest is null
+                ? (DateTime?)null
+                : UtcTimestamps.FromDatabase(latest.CreatedAt),
             // Where the user should land to act on it.
             recommendations = others.Count > 0
                 ? new[] { "changePassword", "signOutOthers" }
@@ -202,7 +207,7 @@ public class UserSessionController : ControllerBase
 
         var key = Request.Headers["X-Session-Key"].ToString().Trim();
 
-        var since = DateTime.Now - Lookback;
+        var since = DateTime.UtcNow - Lookback;
 
         var rows = await _context.UserSessions.AsNoTracking()
             .Where(s => s.UserId == userId && s.CreatedAt >= since)
@@ -219,7 +224,20 @@ public class UserSessionController : ControllerBase
             })
             .ToListAsync(ct);
 
-        return Ok(new { success = true, logins = rows });
+        // MySQL DATETIME carries no zone. These columns store UTC, so attach
+        // that kind before serialising; otherwise a browser reads the naive
+        // string as local time and shows it eight hours early in PH.
+        var logins = rows.Select(s => new
+        {
+            s.device,
+            s.ipAddress,
+            loggedInAt = UtcTimestamps.FromDatabase(s.loggedInAt),
+            lastSeenAt = UtcTimestamps.FromDatabase(s.lastSeenAt),
+            s.isRevoked,
+            s.isCurrent
+        });
+
+        return Ok(new { success = true, logins });
     }
 
     /// <summary>

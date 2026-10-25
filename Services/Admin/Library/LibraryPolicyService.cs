@@ -51,7 +51,8 @@ public class LibraryPolicyService : ILibraryPolicyService
                 {
                     Id = t.TermId,
                     Title = t.Title,
-                    Content = t.Content
+                    Content = t.Content,
+                    UpdatedAt = t.UpdatedAt
                 })
                 .ToList()
         };

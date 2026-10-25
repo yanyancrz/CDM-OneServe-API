@@ -1,6 +1,7 @@
 ﻿using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs;
 using CDM_OneServe_API.DTOs.Admin.Library;
+using CDM_OneServe_API.DTOs.Admin.Library.Returns;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
 using CDM_OneServe_API.Services.Admin.Library;
@@ -40,7 +41,8 @@ public class BorrowService
                 ReturnDate = b.ReturnDate,
                 RenewalCount = b.RenewalCount,
                 Status = b.Status,
-                Remarks = b.Remarks
+                Remarks = b.Remarks,
+                ReturnCondition = b.ReturnCondition
             })
             .ToListAsync();
     }
@@ -66,7 +68,8 @@ public class BorrowService
                 ReturnDate = b.ReturnDate,
                 RenewalCount = b.RenewalCount,
                 Status = b.Status,
-                Remarks = b.Remarks
+                Remarks = b.Remarks,
+                ReturnCondition = b.ReturnCondition
             })
             .FirstOrDefaultAsync();
     }
@@ -108,7 +111,8 @@ public class BorrowService
                 ReturnDate = b.ReturnDate,
                 RenewalCount = b.RenewalCount,
                 Status = b.Status,
-                Remarks = b.Remarks
+                Remarks = b.Remarks,
+                ReturnCondition = b.ReturnCondition
             })
             .ToListAsync();
     }
@@ -179,6 +183,22 @@ public class BorrowService
 
 
         // ============================
+        // UNRESOLVED DAMAGED RETURN
+        // The patron must replace or settle the damaged copy first.
+        // ============================
+
+        var damagedBlock = await LibraryBorrowBlock.GetBlockMessageAsync(
+            _context, transaction.UserId);
+
+        if (damagedBlock != null)
+        {
+            response.Success = false;
+            response.Message = damagedBlock;
+            return response;
+        }
+
+
+        // ============================
         // MAXIMUM BORROW LIMIT
         // Count both pending claim passes
         // and physically borrowed books
@@ -210,10 +230,16 @@ public class BorrowService
 
         transaction.BorrowDate = DateTime.Now;
 
-        // TEMPORARY:
-        // We will reset BorrowDate and DueDate
-        // when the librarian verifies the claim.
-        transaction.DueDate = DateTime.Now.AddDays(7);
+        // The last copy on the shelf is for inside-library use only. The
+        // final due date is still confirmed by the librarian at the counter.
+        var insideUse = book.AvailableCopies <= 1;
+
+        transaction.DueDate = insideUse
+            ? AdminBorrowingService.InsideUseDueDate(DateTime.Now)
+            : DateTime.Now.AddDays(7);
+
+        if (insideUse)
+            transaction.Remarks = LibraryLoanFlags.InsideUse;
 
         transaction.ReturnDate = null;
         transaction.RenewalCount = 0;
@@ -359,9 +385,23 @@ public class BorrowService
     // ============================
     // Return Book
     // ============================
-    public async Task<ServiceResponse<BorrowTransactionDto>> ReturnBookAsync(int borrowId)
+    private static readonly string[] ReturnConditions = { "Good", "Damaged", "Lost" };
+
+    public async Task<ServiceResponse<BorrowTransactionDto>> ReturnBookAsync(
+        int borrowId, string? condition = null)
     {
         var response = new ServiceResponse<BorrowTransactionDto>();
+
+        var requested = string.IsNullOrWhiteSpace(condition) ? "Good" : condition.Trim();
+        var chosen = ReturnConditions.FirstOrDefault(c =>
+            c.Equals(requested, StringComparison.OrdinalIgnoreCase));
+
+        if (chosen == null)
+        {
+            response.Success = false;
+            response.Message = "Choose the book condition: Good, Damaged, or Lost.";
+            return response;
+        }
 
         var borrow = await _context.BorrowTransactions
             .Include(x => x.Book)
@@ -375,7 +415,7 @@ public class BorrowService
             return response;
         }
 
-        if (borrow.Status == "Returned")
+        if (borrow.ReturnDate != null || borrow.Status == "Returned")
         {
             response.Success = false;
             response.Message = "This book has already been returned.";
@@ -389,8 +429,15 @@ public class BorrowService
             return response;
         }
 
+        var now = DateTime.Now;
+        var damaged = chosen == "Damaged";
+        var lost = chosen == "Lost";
+        var replacementDue = LibraryClock.Now.Date.AddDays(LibraryDamagedReturns.DefaultReplacementDays);
+
         // Set Return Date
-        borrow.ReturnDate = DateTime.Now;
+        borrow.ReturnDate = now;
+        borrow.Status = "Returned";
+        borrow.ReturnCondition = chosen;
 
         // A late return suspends the patron for the rest of the semester.
         // Keep an existing, later ban rather than shortening it.
@@ -405,23 +452,85 @@ public class BorrowService
                 borrow.User.BorrowBanUntil = newBan;
         }
 
-        // Update Status
-        borrow.Status = "Returned";
+        var note = $"Returned: {chosen}";
+        borrow.Remarks = string.IsNullOrWhiteSpace(borrow.Remarks)
+            ? note
+            : $"{borrow.Remarks} | {note}";
 
-        // Increase Available Copies
-        borrow.Book.AvailableCopies++;
+        if (damaged)
+        {
+            // The copy stays off the shelf until the patron replaces it or
+            // the library repairs it. Record the deadline the library can
+            // later change on the Damaged Returns page.
+            borrow.Remarks = LibraryDamagedReturns.WithDueDate(borrow.Remarks, replacementDue);
+        }
+        else if (lost)
+        {
+            // The copy is gone for good: the catalog total goes down by one.
+            borrow.Book.TotalCopies = Math.Max(borrow.Book.TotalCopies - 1, 0);
+            borrow.Book.AvailableCopies = Math.Min(
+                borrow.Book.AvailableCopies,
+                borrow.Book.TotalCopies);
+        }
+        else
+        {
+            // Good: put one copy back on the shelf (never above the total).
+            borrow.Book.AvailableCopies = Math.Min(
+                borrow.Book.AvailableCopies + 1,
+                borrow.Book.TotalCopies);
+        }
+
+        if (!damaged)
+        {
+            borrow.Book.Status = borrow.Book.AvailableCopies > 0
+                ? "Available"
+                : "Unavailable";
+            borrow.Book.UpdatedAt = now;
+        }
+
+        var returnMessage = damaged
+            ? $"'{borrow.Book.Title}' was returned damaged. Please return or replace it by {replacementDue:MMM d, yyyy}."
+            : lost
+                ? $"'{borrow.Book.Title}' was reported lost. Please coordinate with the library for its replacement."
+                : $"'{borrow.Book.Title}' was returned. Thank you!";
+
+        var notificationType = damaged ? "book-damaged" : lost ? "book-lost" : "book-returned";
+        var notificationTitle = damaged
+            ? "Damaged Book Returned"
+            : lost
+                ? "Lost Book Reported"
+                : "Book Returned";
+
+        _context.LibraryNotifications.Add(new LibraryNotification
+        {
+            UserId = borrow.UserId,
+            Type = notificationType,
+            Title = notificationTitle,
+            Message = returnMessage,
+            IsRead = false,
+            CreatedAt = now
+        });
 
         AddActivity(
-        borrow.UserId,
-        borrow.BookId,
-        "Return",
-        "Book Returned",
-        $"You returned '{borrow.Book!.Title}'.");
+            borrow.UserId,
+            borrow.BookId,
+            "Return",
+            notificationTitle,
+            $"You returned '{borrow.Book.Title}' ({chosen}).");
 
-            await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync();
+
+        await _push.EnqueueAsync(new PushNotification(
+            UserId: borrow.UserId,
+            Module: "Library",
+            Type: notificationType,
+            Title: notificationTitle,
+            Body: returnMessage,
+            TargetUrl: PushRoutes.LibraryLoans,
+            DedupeKey: $"bookreturned:{borrow.BorrowId}"), CancellationToken.None);
 
         response.Success = true;
-        response.Message = "Book returned successfully.";
+        response.Message = returnMessage;
 
         response.Data = new BorrowTransactionDto
         {
@@ -436,10 +545,29 @@ public class BorrowService
             ReturnDate = borrow.ReturnDate,
             RenewalCount = borrow.RenewalCount,
             Status = borrow.Status,
-            Remarks = borrow.Remarks
+            Remarks = borrow.Remarks,
+            ReturnCondition = borrow.ReturnCondition
         };
 
         return response;
+    }
+
+    // ============================
+    // Open damaged-return obligations for one patron
+    // ============================
+    public async Task<ServiceResponse<List<DamagedReturnDto>>> GetDamagedReturnsAsync(int userId)
+    {
+        var items = await LibraryBorrowBlock.GetOpenDamagedReturnsAsync(
+            _context, userId);
+
+        return new ServiceResponse<List<DamagedReturnDto>>
+        {
+            Success = true,
+            Message = items.Count == 0
+                ? "No damaged-book obligations."
+                : "Damaged-book obligations loaded.",
+            Data = items
+        };
     }
 
     // ============================
@@ -529,7 +657,8 @@ public class BorrowService
             : "Eligible",
 
             Status = borrow.Status,
-            Remarks = borrow.Remarks
+            Remarks = borrow.Remarks,
+            ReturnCondition = borrow.ReturnCondition
         };
 
         return response;
@@ -545,6 +674,7 @@ public class BorrowService
 
             .Where(x =>
                 x.UserId == userId &&
+                x.ReturnDate == null &&
                 (
                     x.Status == "Borrowed" ||
                     x.Status == "ForClaiming"
@@ -587,7 +717,8 @@ public class BorrowService
                                 : "Eligible",
 
                 Status = x.Status,
-                Remarks = x.Remarks
+                Remarks = x.Remarks,
+                ReturnCondition = x.ReturnCondition
             })
 
             .ToListAsync();
@@ -602,6 +733,7 @@ public class BorrowService
             .Include(x => x.Book)
             .Where(x =>
                 x.Status == "Borrowed" &&
+                x.ReturnDate == null &&
                 x.DueDate < DateTime.Now)
             .OrderBy(x => x.DueDate)
             .ToListAsync();
@@ -624,7 +756,8 @@ public class BorrowService
                 RenewalCount = x.RenewalCount,
                 Status = x.Status,
                 OverdueDays = overdueDays,
-                Remarks = x.Remarks
+                Remarks = x.Remarks,
+                ReturnCondition = x.ReturnCondition
             };
         }).ToList();
 

@@ -29,6 +29,22 @@ public class LibraryScanResultDto
 
     // Borrowed books na kailangang i-return (para sa "Confirm Return" button)
     public List<ScanLoanDto> ActiveLoans { get; set; } = new();
+
+    // Unresolved damaged returns that block borrowing and reservation claims.
+    public List<ScanDamagedReturnDto> DamagedReturns { get; set; } = new();
+}
+
+public class ScanDamagedReturnDto
+{
+    public int TransactionId { get; set; }
+    public int BookId { get; set; }
+    public string BookTitle { get; set; } = string.Empty;
+    public string? Author { get; set; }
+    public string? CoverImage { get; set; }
+    public DateTime ReturnDate { get; set; }
+    public DateTime? ReplacementDueDate { get; set; }
+    public bool IsOverdue { get; set; }
+    public int? DaysLeft { get; set; }
 }
 
 public class ScanReservationDto

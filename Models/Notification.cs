@@ -14,5 +14,7 @@ public class Notification
 
     public bool IsRead { get; set; } = false;
 
-    public DateTime CreatedAt { get; set; } = DateTime.Now;
+    // Stored as UTC; the API marks it UTC on the way out so browsers do not
+    // have to guess which zone the zone-less DATETIME came from.
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

@@ -6,6 +6,7 @@ using CDM_OneServe_API.DTOs.Admin.Library.Common;
 using CDM_OneServe_API.Interfaces.Admin.Library;
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
+using CDM_OneServe_API.Services.Library;
 
 using Microsoft.EntityFrameworkCore;
 
@@ -34,7 +35,7 @@ public class AdminBorrowingService : IAdminBorrowingService
     private sealed record Row(
         int BorrowId, int UserId, string? PatronName, string? PatronId, string? PatronType,
         int BookId, string? BookTitle, DateTime BorrowDate, DateTime DueDate,
-        DateTime? ReturnDate);
+        DateTime? ReturnDate, string? Remarks);
 
     private IQueryable<Row> Rows(IQueryable<BorrowTransaction> query) =>
         query.Select(t => new Row(
@@ -47,7 +48,8 @@ public class AdminBorrowingService : IAdminBorrowingService
             t.Book != null ? t.Book.Title : null,
             t.BorrowDate,
             t.DueDate,
-            t.ReturnDate));
+            t.ReturnDate,
+            t.Remarks));
 
     private static BorrowListItemDto ToItem(Row r, DateTime now)
     {
@@ -68,6 +70,7 @@ public class AdminBorrowingService : IAdminBorrowingService
             DueDate = r.DueDate,
             ReturnDate = r.ReturnDate,
             Status = !active ? "Returned" : overdue ? "Overdue" : "Borrowed",
+            IsInsideLibraryOnly = LibraryLoanFlags.IsInsideUse(r.Remarks),
             OverdueDays = days
         };
     }
@@ -258,6 +261,11 @@ public class AdminBorrowingService : IAdminBorrowingService
                 t => t.UserId == user.Id && t.BookId == book.BookId && t.ReturnDate == null, cancellationToken))
             return LibraryResult<BorrowResponseDto>.Failure(409, "This patron already has this book on loan.");
 
+        var damagedBlock = await LibraryBorrowBlock.GetBlockMessageAsync(
+            _db, user.Id, cancellationToken);
+        if (damagedBlock != null)
+            return LibraryResult<BorrowResponseDto>.Failure(409, damagedBlock);
+
         var now = DateTime.Now;
 
         // Atomic: two people borrowing the last copy at the same time cannot both succeed.
@@ -274,7 +282,11 @@ public class AdminBorrowingService : IAdminBorrowingService
             .Where(b => b.BookId == book.BookId && b.AvailableCopies <= 0)
             .ExecuteUpdateAsync(s => s.SetProperty(b => b.Status, "Unavailable"), cancellationToken);
 
-        var due = DueDateFor(now, dto.LoanDays);
+        // The last copy on the shelf never leaves the library. The UI
+        // auto-selects this; the server enforces it even if the request
+        // does not ask for it.
+        var insideUse = dto.InsideLibraryOnly || book.AvailableCopies <= 1;
+        var due = insideUse ? InsideUseDueDate(now) : DueDateFor(now, dto.LoanDays);
 
         var loan = new BorrowTransaction
         {
@@ -284,12 +296,15 @@ public class AdminBorrowingService : IAdminBorrowingService
             DueDate = due,
             Status = "Borrowed",
             RenewalCount = 0,
+            Remarks = insideUse ? LibraryLoanFlags.InsideUse : null,
             CreatedAt = now
         };
 
         _db.BorrowTransactions.Add(loan);
 
-        _activity.Add(staffId, "LIBRARY_BOOK_BORROWED", $"issued \"{book.Title}\" to {user.FullName}");
+        _activity.Add(staffId, "LIBRARY_BOOK_BORROWED",
+            $"issued \"{book.Title}\" to {user.FullName}" +
+            (insideUse ? " (inside library use only)" : string.Empty));
 
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -313,7 +328,8 @@ public class AdminBorrowingService : IAdminBorrowingService
             CallNo = book.CallNo,
             BorrowDate = now,
             DueDate = due,
-            LoanDays = dto.LoanDays,
+            LoanDays = insideUse ? 0 : dto.LoanDays,
+            IsInsideLibraryOnly = insideUse,
             RemainingSlots = Math.Max(0, limit - (activeLoans + 1)),
             ProcessedBy = staffName
         }, 201);
@@ -326,6 +342,11 @@ public class AdminBorrowingService : IAdminBorrowingService
     // Due at the end of the last loan day. Shared with reservation claims (Part 8).
     internal static DateTime DueDateFor(DateTime now, int loanDays) =>
         now.Date.AddDays(loanDays + 1).AddSeconds(-1);
+
+    // Inside-library use ends when the circulation desk closes (5:00 PM,
+    // Philippine time) on the same day.
+    internal static DateTime InsideUseDueDate(DateTime now) =>
+        LibraryClock.TodayAt(17);
 
     // Shared with reservation claims (Part 8), so both use the same rules.
     internal static string? CheckEligibility(User user, int activeLoans, int limit)
@@ -364,6 +385,11 @@ public class AdminBorrowingService : IAdminBorrowingService
 
         var limit = LibraryDefaults.BorrowLimitFor(user.Role);
         var reason = CheckEligibility(user, active, limit);
+
+        // Surface the damaged-return block on the Borrow page and the
+        // embedded Scanner before the staff tries to issue a book.
+        reason ??= await LibraryBorrowBlock.GetBlockMessageAsync(
+            _db, user.Id, cancellationToken);
 
         return new PatronLookupDto
         {

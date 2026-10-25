@@ -91,7 +91,12 @@ public class BookService
 
             AvailableCopies = book.AvailableCopies,
 
-            Status = book.Status,
+            // Availability is driven by the copy count. Deriving it here
+            // repairs older rows whose Status was left as "Unavailable"
+            // after a return, without a data migration or bulk update.
+            Status = book.Status == "Archived"
+                ? "Archived"
+                : book.AvailableCopies > 0 ? "Available" : "Unavailable",
 
             CreatedAt = book.CreatedAt,
 

@@ -148,8 +148,17 @@ public class AdminReturnService : IAdminReturnService
         var title = loan.Book?.Title ?? "the book";
         var patron = loan.User?.FullName ?? "a patron";
 
+        var damaged = condition == "Damaged";
+        var replacementDue = LibraryClock.Now.Date.AddDays(LibraryDamagedReturns.DefaultReplacementDays);
+
         var note = $"Returned: {condition}";
         var remarks = string.IsNullOrWhiteSpace(loan.Remarks) ? note : $"{loan.Remarks} | {note}";
+
+        // A damaged copy stays off the shelf, and the patron gets a deadline
+        // to return or replace it. The deadline lives in the remarks marker
+        // (no schema change) and the library can change it later.
+        if (damaged)
+            remarks = LibraryDamagedReturns.WithDueDate(remarks, replacementDue);
 
         // Anything that returns or throws before Commit rolls everything back.
         await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
@@ -182,7 +191,8 @@ public class AdminReturnService : IAdminReturnService
                     .SetProperty(b => b.TotalCopies, b => b.TotalCopies - 1)
                     .SetProperty(b => b.UpdatedAt, now), cancellationToken);
         }
-        // Damaged: the copy stays off the shelf until the Head fixes the totals.
+        // Damaged: the copy stays off the shelf until the patron replaces it or
+        // the library repairs it. Tracked on the Damaged Returns page.
 
         // A late return suspends the patron for the rest of the semester.
         // Keep an existing, later ban rather than shortening it.
@@ -213,13 +223,18 @@ public class AdminReturnService : IAdminReturnService
 
         var returnMessage = bannedUntil.HasValue
             ? $"'{title}' was returned late. Your borrowing is suspended for the rest of the semester (until {bannedUntil:MMM d, yyyy})."
-            : $"'{title}' was returned. Thank you!";
+            : damaged
+                ? $"'{title}' was returned damaged. Please return or replace it by {replacementDue:MMM d, yyyy}."
+                : $"'{title}' was returned. Thank you!";
+
+        var notificationType = damaged ? "book-damaged" : "book-returned";
+        var notificationTitle = damaged ? "Damaged Book Returned" : "Book Returned";
 
         _db.LibraryNotifications.Add(new LibraryNotification
         {
             UserId = loan.UserId,
-            Type = "book-returned",
-            Title = "Book Returned",
+            Type = notificationType,
+            Title = notificationTitle,
             Message = returnMessage,
             IsRead = false,
             CreatedAt = now
@@ -228,10 +243,10 @@ public class AdminReturnService : IAdminReturnService
         await _push.EnqueueAsync(new PushNotification(
             UserId: loan.UserId,
             Module: "Library",
-            Type: "book-returned",
-            Title: "Book Returned",
+            Type: notificationType,
+            Title: notificationTitle,
             Body: returnMessage,
-            TargetUrl: PushRoutes.Resolve("Library", "book-returned"),
+            TargetUrl: PushRoutes.Resolve("Library", notificationType),
             DedupeKey: $"bookreturned:{loan.BorrowId}"), cancellationToken);
 
         _activity.Add(staffId, "LIBRARY_BOOK_RETURNED",
@@ -261,6 +276,7 @@ public class AdminReturnService : IAdminReturnService
             OverdueDays = overdueDays,
             BannedUntil = bannedUntil,
             Condition = condition,
+            ReplacementDueDate = damaged ? replacementDue : null,
             CopyReturnedToShelf = backOnShelf,
             ProcessedBy = staffName
         });

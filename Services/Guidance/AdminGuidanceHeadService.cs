@@ -145,7 +145,7 @@ public class AdminGuidanceHeadService
             UserId = user.Id,
             Action = "Changed password",
             Description = "You changed your account password.",
-            CreatedAt = DateTime.Now
+            CreatedAt = DateTime.UtcNow
         });
 
         await _context.SaveChangesAsync(ct);
@@ -304,7 +304,9 @@ public class AdminGuidanceHeadService
                 Kind = "account",
                 Title = "Signed in",
                 Detail = nameById.GetValueOrDefault(l.UserId, $"User #{l.UserId}"),
-                At = l.CreatedAt
+                // Same PH wall-clock convention as the other activity rows,
+                // so the dashboard's relative time is not eight hours off.
+                At = GuidanceClock.FromUtc(l.CreatedAt)
             });
         }
 
@@ -999,15 +1001,20 @@ public class AdminGuidanceHeadService
             .ToListAsync(ct);
 
         foreach (var row in rows)
-            map[row.UserId] = row.At;
+            // UserActivities store UTC; DATETIME reads back without a zone.
+            map[row.UserId] = UtcTimestamps.FromDatabase(row.At);
 
         return map;
     }
 
-    private async Task<DateTime?> LastLoginAsync(int userId, CancellationToken ct) =>
-        await _context.UserActivities.AsNoTracking()
+    private async Task<DateTime?> LastLoginAsync(int userId, CancellationToken ct)
+    {
+        var at = await _context.UserActivities.AsNoTracking()
             .Where(a => a.Action == UserActivityActions.Login && a.UserId == userId)
             .MaxAsync(a => (DateTime?)a.CreatedAt, ct);
+
+        return UtcTimestamps.FromDatabase(at);
+    }
 
     /// <summary>Every account that has signed in at least once (small set of ids).</summary>
     private async Task<HashSet<int>> SignedInUserIdsAsync(CancellationToken ct)

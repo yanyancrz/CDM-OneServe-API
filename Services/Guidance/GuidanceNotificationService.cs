@@ -50,7 +50,10 @@ public class GuidanceNotificationService
             UserId = userId,
             Type = type,
             Title = title,
-            Message = message
+            Message = message,
+            // Explicit UTC: this value is serialised both by the GET endpoint
+            // and by the SignalR event below, so it must carry a zone.
+            CreatedAt = DateTime.UtcNow
         };
 
         _context.Notifications.Add(notification);
@@ -107,6 +110,13 @@ public class GuidanceNotificationService
                 CreatedAt = n.CreatedAt
             })
             .ToListAsync(ct);
+
+        // MySQL DATETIME has no zone; these rows are UTC. Mark them so the
+        // browser receives "Z" and converts to Asia/Manila exactly once.
+        foreach (var item in items)
+        {
+            item.CreatedAt = UtcTimestamps.FromDatabase(item.CreatedAt);
+        }
 
         return new GuidanceNotificationListDto
         {

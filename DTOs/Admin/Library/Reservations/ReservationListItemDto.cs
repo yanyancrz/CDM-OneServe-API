@@ -28,6 +28,10 @@ public class ReservationListItemDto
     // True for ReadyForPickup: one copy is already off the shelf for this patron.
     public bool HoldsCopy { get; set; }
 
+    // True when claiming this reservation would use the last copy on the
+    // shelf, so the loan must stay inside the library.
+    public bool WillBeInsideUse { get; set; }
+
     // Computed on the server. The UI only shows or hides buttons.
     public bool CanApprove { get; set; }
     public bool CanMarkReady { get; set; }
