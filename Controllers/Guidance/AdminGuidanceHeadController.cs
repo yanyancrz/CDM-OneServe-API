@@ -196,6 +196,32 @@ public class AdminGuidanceHeadController : ControllerBase
         return Ok(ApiResponse.Ok<object?>(null, "Deleted."));
     }
 
+    [HttpPut("reports/narrative/{id}/rename")]
+    public IActionResult RenameNarrativeReport(string id, [FromBody] string newName)
+    {
+        var dir = GetNarrativeDir();
+        var oldPath = Path.Combine(dir, Path.GetFileName(id));
+        if (!System.IO.File.Exists(oldPath)) return NotFound(ApiResponse.Fail("File not found."));
+
+        var safeName = Path.GetFileName(newName ?? "");
+        if (string.IsNullOrWhiteSpace(safeName)) return BadRequest(ApiResponse.Fail("Invalid name."));
+
+        var newPath = Path.Combine(dir, safeName);
+        if (oldPath == newPath) return Ok(ApiResponse.Ok<object?>(null, "Unchanged."));
+        if (System.IO.File.Exists(newPath)) return Conflict(ApiResponse.Fail("A file with that name already exists."));
+
+        System.IO.File.Move(oldPath, newPath);
+        var fi = new FileInfo(newPath);
+        return Ok(ApiResponse.Ok(new
+        {
+            id = fi.Name,
+            name = safeName,
+            size = fi.Length,
+            uploadedAt = fi.CreationTimeUtc,
+            url = "/uploads/guidance-reports/" + fi.Name,
+        }, "Renamed."));
+    }
+
     private string GetNarrativeDir() =>
         Path.Combine(_env.WebRootPath ?? _env.ContentRootPath, "uploads", "guidance-reports");
 
