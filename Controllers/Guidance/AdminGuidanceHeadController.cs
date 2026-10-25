@@ -196,8 +196,8 @@ public class AdminGuidanceHeadController : ControllerBase
         return Ok(ApiResponse.Ok<object?>(null, "Deleted."));
     }
 
-    [HttpPut("reports/narrative/{id}/rename")]
-    public IActionResult RenameNarrativeReport(string id, [FromBody] string newName)
+    [HttpPost("reports/narrative/{id}/rename")]
+    public IActionResult RenameNarrativeReport(string id, [FromQuery] string newName)
     {
         var dir = GetNarrativeDir();
         var oldPath = Path.Combine(dir, Path.GetFileName(id));
