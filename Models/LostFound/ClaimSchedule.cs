@@ -99,4 +99,10 @@ public class ClaimSchedule
     public DateTime? VerifiedAt { get; set; }
 
     public int? VerifiedByAdminId { get; set; }
+
+    // Snapshots for the completed-handover record: who released the
+    // item, under which role. Additive and nullable for old rows.
+    public string? VerifiedByName { get; set; }
+
+    public string? VerifiedByRole { get; set; }
 }

@@ -32,4 +32,15 @@ public class ReportDto
 
     /** When the handover was recorded. */
     public DateTime? ReturnedAt { get; set; }
+
+    // ---- review attribution (admin console) ----
+
+    /** Administrator who published/rejected this report. */
+    public int? ReviewedByUserId { get; set; }
+
+    public string? ReviewedByName { get; set; }
+
+    public string? ReviewedByRole { get; set; }
+
+    public DateTime? ReviewedAt { get; set; }
 }

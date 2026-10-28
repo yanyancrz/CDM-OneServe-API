@@ -63,6 +63,11 @@ public class ClaimScheduleDto
     public DateTime? VerifiedAt { get; set; }
 
     public int? VerifiedByAdminId { get; set; }
+
+    /** Who recorded the handover (name + role snapshot). */
+    public string? VerifiedByName { get; set; }
+
+    public string? VerifiedByRole { get; set; }
 }
 
 /** The answer to a successful booking. */

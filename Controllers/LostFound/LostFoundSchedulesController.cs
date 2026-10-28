@@ -1,3 +1,4 @@
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.DTOs.Admin.Library.Common;
 using CDM_OneServe_API.DTOs.LostFound;
 using CDM_OneServe_API.Services.LostFound;
@@ -34,7 +35,7 @@ public class LostFoundSchedulesController : LostFoundControllerBase
 
     /// <summary>Publish one pickup window.</summary>
     [HttpPost("availability")]
-    [Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
+    [Authorize(Roles = LostFoundRoles.Access)]
     public async Task<IActionResult> CreateAvailability(CreatePickupAvailabilityDto dto)
     {
         return ToAction(await _service.CreateAvailabilityAsync(dto));
@@ -42,7 +43,7 @@ public class LostFoundSchedulesController : LostFoundControllerBase
 
     /// <summary>Publish several non-overlapping pickup windows at once.</summary>
     [HttpPost("availability/bulk")]
-    [Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
+    [Authorize(Roles = LostFoundRoles.Access)]
     public async Task<IActionResult> CreateAvailabilityBatch(CreatePickupAvailabilityBatchDto dto)
     {
         return ToAction(await _service.CreateAvailabilityBatchAsync(dto));
@@ -53,7 +54,7 @@ public class LostFoundSchedulesController : LostFoundControllerBase
     /// it, so a booked pickup can never lose its window.
     /// </summary>
     [HttpDelete("availability/{id:int}")]
-    [Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
+    [Authorize(Roles = LostFoundRoles.Access)]
     public async Task<IActionResult> DeleteAvailability(int id)
     {
         return ToAction(await _service.DeleteAvailabilityAsync(id));
@@ -69,7 +70,7 @@ public class LostFoundSchedulesController : LostFoundControllerBase
 
     /// <summary>Every schedule, ordered Awaiting Pickup first.</summary>
     [HttpGet]
-    [Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
+    [Authorize(Roles = LostFoundRoles.Access)]
     public async Task<IActionResult> GetAllSchedules()
     {
         return Ok(ApiResponse.Ok(await _service.GetAllSchedulesAsync()));
@@ -81,7 +82,7 @@ public class LostFoundSchedulesController : LostFoundControllerBase
     /// Claimed, and closes every other active claim on the item.
     /// </summary>
     [HttpPut("{scheduleId:int}/complete")]
-    [Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
+    [Authorize(Roles = LostFoundRoles.Access)]
     public async Task<IActionResult> CompleteSchedule(
         int scheduleId,
         [FromBody] CompleteClaimScheduleDto dto)

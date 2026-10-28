@@ -55,4 +55,11 @@ public class ClaimRecord
     public DateTime? DecisionAt { get; set; }
 
     public int? DecisionByUserId { get; set; }
+
+    // Snapshots of the administrator who made the decision, so the
+    // console can show "Approved by: Maria Santos (Sub-Admin)" without
+    // a join and without losing the name if the account changes later.
+    public string? DecisionByName { get; set; }
+
+    public string? DecisionByRole { get; set; }
 }

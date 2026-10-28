@@ -55,6 +55,13 @@ public class ClaimAdminDto
     public string? DecisionReason { get; set; }
 
     public DateTime? DecisionAt { get; set; }
+
+    /** Who decided (snapshot taken when the decision was made). */
+    public int? DecisionByUserId { get; set; }
+
+    public string? DecisionByName { get; set; }
+
+    public string? DecisionByRole { get; set; }
 }
 
 /** The Lost & Found admin dashboard counters. */

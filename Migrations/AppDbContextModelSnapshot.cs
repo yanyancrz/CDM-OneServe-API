@@ -34,6 +34,30 @@ namespace CDM_OneServe_API.Migrations
                         .IsRequired()
                         .HasColumnType("longtext");
 
+                    b.Property<string>("ActorName")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ActorRole")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Details")
+                        .HasColumnType("longtext");
+
+                    b.Property<int?>("EntityId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EntityType")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Module")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("NewStatus")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("PreviousStatus")
+                        .HasColumnType("longtext");
+
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("datetime(6)");
 
@@ -1079,6 +1103,12 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<DateTime?>("DecisionAt")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<string>("DecisionByName")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("DecisionByRole")
+                        .HasColumnType("longtext");
+
                     b.Property<int?>("DecisionByUserId")
                         .HasColumnType("int");
 
@@ -1173,6 +1203,12 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<int?>("VerifiedByAdminId")
                         .HasColumnType("int");
 
+                    b.Property<string>("VerifiedByName")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("VerifiedByRole")
+                        .HasColumnType("longtext");
+
                     b.HasKey("ScheduleId");
 
                     b.HasIndex("ClaimId");
@@ -1220,6 +1256,18 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<string>("ReportType")
                         .IsRequired()
                         .HasColumnType("longtext");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ReviewedByName")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ReviewedByRole")
+                        .HasColumnType("longtext");
+
+                    b.Property<int?>("ReviewedByUserId")
+                        .HasColumnType("int");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -1791,6 +1839,9 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<string>("DeviceLabel")
                         .HasColumnType("longtext");
 
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<string>("IpAddress")
                         .HasColumnType("longtext");
 
@@ -1799,6 +1850,12 @@ namespace CDM_OneServe_API.Migrations
 
                     b.Property<DateTime>("LastSeenAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("LoggedOutAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("LogoutReason")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("SessionKey")
                         .IsRequired()

@@ -1,3 +1,4 @@
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.DTOs.Admin.Library.Common;
 using CDM_OneServe_API.DTOs.LostFound;
 using CDM_OneServe_API.Services.LostFound;
@@ -9,18 +10,49 @@ namespace CDM_OneServe_API.Controllers.LostFound;
 
 /// <summary>
 /// The Lost &amp; Found admin console - read-only listings plus
-/// the review actions. Everything here is gated by the
-/// LostFoundAdmin role (OneServe's built-in Admin and SuperAdmin
-/// pass too, since they administer every module).
+/// the review actions.
+///
+/// Access:
+///   - LostFoundSuperAdmin / LostFoundAdmin / Admin / SuperAdmin: everything.
+///   - LostFoundSubAdmin: reports, claims, pickups and their own profile.
+///   - Administrator management, login activity and the activity log are
+///     Super-Admin-only and are re-checked in the service.
 /// </summary>
 [ApiController]
 [Route("api/lostfound/admin")]
-[Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
+[Authorize(Roles = LostFoundRoles.Access)]
 public class LostFoundAdminController : LostFoundControllerBase
 {
     private readonly LostFoundService _service;
+    private readonly LostFoundAdminService _admins;
 
-    public LostFoundAdminController(LostFoundService service) => _service = service;
+    public LostFoundAdminController(
+        LostFoundService service,
+        LostFoundAdminService admins)
+    {
+        _service = service;
+        _admins = admins;
+    }
+
+    // =========================================================
+    // SESSION / IDENTITY
+    // =========================================================
+
+    /// <summary>
+    /// The signed-in console user and what they may do. This is the one
+    /// endpoint that still answers while a forced password change is
+    /// pending, so the console can render the change-password screen.
+    /// </summary>
+    [HttpGet("me")]
+    public async Task<IActionResult> GetMe(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _admins.GetMeAsync(userId, ct));
+    }
+
+    // =========================================================
+    // READ-ONLY CONSOLE DATA
+    // =========================================================
 
     [HttpGet("stats")]
     public async Task<IActionResult> GetStats()
@@ -78,5 +110,64 @@ public class LostFoundAdminController : LostFoundControllerBase
     public async Task<IActionResult> GetAvailability()
     {
         return Ok(ApiResponse.Ok(await _service.GetAvailabilityAsync()));
+    }
+
+    // =========================================================
+    // ADMIN MANAGEMENT (SUPER ADMIN)
+    // =========================================================
+
+    [HttpGet("admins")]
+    [Authorize(Roles = LostFoundRoles.Management)]
+    public async Task<IActionResult> GetAdmins(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _admins.GetAdminsAsync(userId, ct));
+    }
+
+    [HttpPost("admins")]
+    [Authorize(Roles = LostFoundRoles.Management)]
+    public async Task<IActionResult> CreateAdmin(
+        [FromBody] CreateSubAdminDto dto,
+        CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _admins.CreateSubAdminAsync(userId, dto, ct));
+    }
+
+    [HttpPut("admins/{id:int}/status")]
+    [Authorize(Roles = LostFoundRoles.Management)]
+    public async Task<IActionResult> SetAdminStatus(
+        int id,
+        [FromBody] UpdateAdminStatusDto dto,
+        CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _admins.SetAdminStatusAsync(userId, id, dto.IsActive, ct));
+    }
+
+    // =========================================================
+    // LOGIN MONITORING + AUDIT (SUPER ADMIN)
+    // =========================================================
+
+    [HttpGet("login-activity")]
+    [Authorize(Roles = LostFoundRoles.Management)]
+    public async Task<IActionResult> GetLoginActivity(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+
+        var sessionKey = Request.Headers["X-Session-Key"].ToString();
+        return ToAction(await _admins.GetLoginActivityAsync(userId, sessionKey, ct));
+    }
+
+    [HttpGet("activity-log")]
+    [Authorize(Roles = LostFoundRoles.Management)]
+    public async Task<IActionResult> GetActivityLog(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? entityType = null,
+        CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _admins.GetActivityLogAsync(userId, page, pageSize, entityType, ct));
     }
 }

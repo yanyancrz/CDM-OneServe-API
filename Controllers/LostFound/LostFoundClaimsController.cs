@@ -1,3 +1,4 @@
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.DTOs.Admin.Library.Common;
 using CDM_OneServe_API.DTOs.LostFound;
 using CDM_OneServe_API.Services.LostFound;
@@ -71,7 +72,10 @@ public class LostFoundClaimsController : LostFoundControllerBase
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
 
-        var isAdmin = User.IsInRole("LostFoundAdmin") || User.IsInRole("Admin") ||
+        var isAdmin = User.IsInRole(LostFoundRoles.LegacyAdmin) ||
+                      User.IsInRole(LostFoundRoles.SuperAdmin) ||
+                      User.IsInRole(LostFoundRoles.SubAdmin) ||
+                      User.IsInRole("Admin") ||
                       User.IsInRole("SuperAdmin");
 
         var result = await _service.GetClaimProofAsync(userId, id, isAdmin, ct);

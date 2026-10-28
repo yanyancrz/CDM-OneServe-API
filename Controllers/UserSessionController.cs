@@ -113,6 +113,47 @@ public class UserSessionController : ControllerBase
     }
 
     /// <summary>
+    /// Ends THIS device's session record and revokes the token that was
+    /// minted for it. The browser also clears its stored token; this makes
+    /// the logout visible in the admin login activity page and stops the
+    /// token from working if it was copied.
+    /// </summary>
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var userId)) return UnauthorizedSession();
+
+        var key = Request.Headers["X-Session-Key"].ToString().Trim();
+        var now = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+
+        if (key.Length > 0)
+        {
+            var session = await _context.UserSessions
+                .Where(s => s.UserId == userId && s.SessionKey == key)
+                .FirstOrDefaultAsync(ct);
+
+            if (session is not null)
+            {
+                session.LoggedOutAt ??= now;
+                session.LogoutReason ??= "User logout";
+                session.LastSeenAt = now;
+            }
+        }
+
+        // Revoke every token minted before now for this account. Other
+        // devices are not signed out (use /everywhere for that), but this
+        // device's token is dead from the next request onward.
+        await _context.Users
+            .Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(u => u.TokensValidFrom, now), ct);
+
+        await _context.SaveChangesAsync(ct);
+
+        return Ok(new { success = true, message = "Signed out.", signedOutAt = now });
+    }
+
+    /// <summary>
     /// Stops the "another device" warning by marking every OTHER session of
     /// this account revoked. It does NOT sign those devices out - that is
     /// impossible with a stateless token - it records that the user has seen
@@ -181,7 +222,9 @@ public class UserSessionController : ControllerBase
         await _context.UserSessions
             .Where(s => s.UserId == userId && !s.IsRevoked)
             .ExecuteUpdateAsync(setters => setters
-                .SetProperty(s => s.IsRevoked, true), ct);
+                .SetProperty(s => s.IsRevoked, true)
+                .SetProperty(s => s.LoggedOutAt, now)
+                .SetProperty(s => s.LogoutReason, "Signed out everywhere"), ct);
 
         return Ok(new
         {

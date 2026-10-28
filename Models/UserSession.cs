@@ -48,4 +48,27 @@ public class UserSession
     /// flag rather than deleting the row, so the history stays readable.
     /// </summary>
     public bool IsRevoked { get; set; }
+
+    // =========================================================
+    // LIFECYCLE (Lost & Found admin login monitoring)
+    //
+    // These are additive and nullable: existing rows keep working,
+    // and the auth path still never treats this table as an
+    // allow-list. They only describe when a session ended so the
+    // console can show Active / Logged Out / Session Expired.
+    // =========================================================
+
+    /// <summary>When the user explicitly signed this device out.</summary>
+    public DateTime? LoggedOutAt { get; set; }
+
+    /// <summary>Why the session ended ("User logout", "Signed out everywhere").</summary>
+    public string? LogoutReason { get; set; }
+
+    /// <summary>
+    /// When the JWT minted at login stops being valid. Written at login as
+    /// CreatedAt + 8 hours, matching the token lifetime, so an app that was
+    /// closed without signing out can be reported as "Session Expired"
+    /// instead of staying "Active" forever.
+    /// </summary>
+    public DateTime? ExpiresAt { get; set; }
 }

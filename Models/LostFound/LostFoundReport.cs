@@ -61,4 +61,21 @@ public class LostFoundReport
 
     public string ItemCustody { get; set; } =
         "None";
+
+    // =========================================================
+    // REVIEW ATTRIBUTION
+    //
+    // Snapshots of the signed-in administrator who published or
+    // rejected this report. The name and role are copied here so
+    // the audit trail stays readable even if the account is later
+    // renamed, deactivated or deleted.
+    // =========================================================
+
+    public int? ReviewedByUserId { get; set; }
+
+    public string? ReviewedByName { get; set; }
+
+    public string? ReviewedByRole { get; set; }
+
+    public DateTime? ReviewedAt { get; set; }
 }

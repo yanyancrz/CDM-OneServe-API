@@ -3,6 +3,7 @@ using System.Text;
 
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.Models;
+using CDM_OneServe_API.Authorization;
 
 using CDM_OneServe_API.Services;
 using CDM_OneServe_API.Services.Admin;
@@ -141,6 +142,8 @@ builder.Services.AddHostedService<GuidanceReminderBackgroundService>();
 // `models` live in the same DbContext - no separate FINDDB, no duplicate
 // users table.
 builder.Services.AddScoped<LostFoundService>();
+builder.Services.AddScoped<LostFoundAuditService>();
+builder.Services.AddScoped<LostFoundAdminService>();
 builder.Services.AddScoped<IClaimProofStorage, ClaimProofStorage>();
 
 // LIBRARY ALERTS - every 6 hours: due-soon (1 day before), overdue, and
@@ -422,6 +425,78 @@ app.UseStaticFiles();
 
 // Authentication MUST come before Authorization.
 app.UseAuthentication();
+
+// =====================================================
+// LOST & FOUND - FORCED INITIAL PASSWORD CHANGE
+//
+// A newly created Sub-Admin must replace the initial password before
+// touching the module. The check reads the account from the database,
+// so it cannot be bypassed with a stale JWT or a client-supplied flag.
+// /api/lostfound/admin/me stays reachable so the console can render the
+// change-password screen; the password change itself uses /api/profile.
+// =====================================================
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value ?? string.Empty;
+
+    var isLostFoundPath = path.StartsWith("/api/lostfound", StringComparison.OrdinalIgnoreCase);
+    var isMe = path.Equals("/api/lostfound/admin/me", StringComparison.OrdinalIgnoreCase);
+
+    if (isLostFoundPath && context.User.Identity?.IsAuthenticated == true)
+    {
+        var role = context.User.FindFirst(ClaimTypes.Role)?.Value;
+
+        if (LostFoundRoles.IsLostFoundRole(role) &&
+            int.TryParse(context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var userId) &&
+            userId > 0)
+        {
+            var db = context.RequestServices.GetRequiredService<AppDbContext>();
+
+            if (!isMe)
+            {
+                var mustChange = await db.Users
+                    .AsNoTracking()
+                    .Where(u => u.Id == userId)
+                    .Select(u => u.MustChangePassword)
+                    .FirstOrDefaultAsync();
+
+                if (mustChange)
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    context.Response.ContentType = "application/json";
+                    await context.Response.WriteAsJsonAsync(new
+                    {
+                        success = false,
+                        code = "password_change_required",
+                        message = "Change your initial password before using the Lost & Found console."
+                    });
+                    return;
+                }
+            }
+
+            // Keep "Last activity" on the login-activity page honest. The
+            // shared session-status poll only runs from the student dashboard,
+            // so the console's own requests record their own heartbeat here.
+            var sessionKey = context.Request.Headers["X-Session-Key"].ToString().Trim();
+
+            if (sessionKey.Length > 0)
+            {
+                var now = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+
+                await db.UserSessions
+                    .Where(s => s.UserId == userId &&
+                                s.SessionKey == sessionKey &&
+                                s.LoggedOutAt == null &&
+                                !s.IsRevoked)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(s => s.LastSeenAt, now));
+            }
+        }
+    }
+
+    await next();
+});
+
 app.UseAuthorization();
 
 app.MapControllers();

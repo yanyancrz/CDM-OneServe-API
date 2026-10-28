@@ -1,3 +1,4 @@
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.DTOs.Admin.Library.Common;
 using CDM_OneServe_API.DTOs.LostFound;
 using CDM_OneServe_API.Services.LostFound;
@@ -114,9 +115,10 @@ public class LostFoundReportsController : LostFoundControllerBase
 
     /// <summary>Admin review: publish or reject a pending report.</summary>
     [HttpPut("{id:int}/status")]
-    [Authorize(Roles = "LostFoundAdmin,Admin,SuperAdmin")]
+    [Authorize(Roles = LostFoundRoles.Access)]
     public async Task<IActionResult> UpdateReportStatus(int id, [FromBody] UpdateStatusDto dto)
     {
-        return ToAction(await _service.UpdateReportStatusAsync(id, dto.Status));
+        if (!TryGetUserId(out var actorId)) return InvalidSession();
+        return ToAction(await _service.UpdateReportStatusAsync(actorId, id, dto.Status));
     }
 }

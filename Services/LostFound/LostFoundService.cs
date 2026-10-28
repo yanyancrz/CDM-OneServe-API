@@ -1,4 +1,5 @@
 using CDM_OneServe_API.Data;
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.DTOs.LostFound;
 using CDM_OneServe_API.DTOs.Notifications;
 using CDM_OneServe_API.Models.LostFound;
@@ -37,19 +38,22 @@ public class LostFoundService
     private readonly IPushDispatcher _push;
     private readonly PushSubscriptionService _pushStore;
     private readonly IClaimProofStorage _proof;
+    private readonly LostFoundAuditService _audit;
 
     public LostFoundService(
         AppDbContext db,
         IWebHostEnvironment environment,
         IPushDispatcher push,
         PushSubscriptionService pushStore,
-        IClaimProofStorage proof)
+        IClaimProofStorage proof,
+        LostFoundAuditService audit)
     {
         _db = db;
         _environment = environment;
         _push = push;
         _pushStore = pushStore;
         _proof = proof;
+        _audit = audit;
     }
 
     // =========================================================
@@ -355,8 +359,14 @@ public class LostFoundService
     }
 
     /// <summary>Admin review: publish or reject a pending report.</summary>
-    public async Task<LostFoundResult<ReportDto>> UpdateReportStatusAsync(int id, string status)
+    public async Task<LostFoundResult<ReportDto>> UpdateReportStatusAsync(
+        int actorUserId, int id, string status)
     {
+        var actor = await _audit.GetActorAsync(actorUserId);
+        if (actor is null || !actor.IsAdmin)
+            return LostFoundResult<ReportDto>.Forbidden(
+                "Only a Lost & Found administrator can review reports.");
+
         var requested = status?.Trim() ?? "";
 
         if (!IsStatus(requested, "Published") && !IsStatus(requested, "Rejected"))
@@ -369,7 +379,25 @@ public class LostFoundService
         if (!IsStatus(report.Status, "Pending"))
             return LostFoundResult<ReportDto>.BadRequest("Only pending reports can be reviewed.");
 
+        var previousStatus = report.Status;
+
         report.Status = IsStatus(requested, "Published") ? "Published" : "Rejected";
+
+        // Attribution is a snapshot taken from the authenticated actor, never
+        // from the request. It survives later renames and deactivation.
+        report.ReviewedByUserId = actor.Id;
+        report.ReviewedByName = actor.FullName;
+        report.ReviewedByRole = actor.Role;
+        report.ReviewedAt = PhNow();
+
+        await _audit.StageAsync(
+            actorUserId,
+            IsStatus(report.Status, "Published") ? "Report Approved" : "Report Rejected",
+            "Report",
+            report.ReportId,
+            previousStatus,
+            report.Status,
+            $"{report.ItemName} - {report.ReportType} report.");
 
         await _db.SaveChangesAsync();
 
@@ -955,7 +983,10 @@ public class LostFoundService
         var report = claim.Report;
         var finderId = await GetActualFinderUserIdAsync(report);
 
-        if (actorUserId != finderId && !await IsLostFoundAdminAsync(actorUserId))
+        var actor = await _audit.GetActorAsync(actorUserId);
+        var isAdmin = actor?.IsAdmin == true;
+
+        if (actorUserId != finderId && !isAdmin)
             return LostFoundResult.Forbidden("Only the item's finder or the Lost & Found admin can review claims.");
 
         if (approve)
@@ -966,10 +997,27 @@ public class LostFoundService
             if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == claim.ReportId && c.Status == "Returned"))
                 return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
+            var previousStatus = claim.Status;
+
             claim.Status = "Awaiting Pickup";
             claim.DecisionReason = trimmedReason;
             claim.DecisionAt = PhNow();
             claim.DecisionByUserId = actorUserId;
+
+            if (isAdmin)
+            {
+                claim.DecisionByName = actor!.FullName;
+                claim.DecisionByRole = actor.Role;
+
+                await _audit.StageAsync(
+                    actorUserId,
+                    "Claim Approved",
+                    "Claim",
+                    claim.ClaimId,
+                    previousStatus,
+                    claim.Status,
+                    $"Claim on report #{claim.ReportId} ({report.ItemName}) approved for pickup.");
+            }
 
             var hasSchedule = await _db.ClaimSchedules
                 .AnyAsync(s => s.ClaimId == claim.ClaimId && s.Status != "Cancelled");
@@ -1019,14 +1067,31 @@ public class LostFoundService
                 return LostFoundResult.BadRequest(
                     "Only claims under review can be sent back for more information.");
 
-            return await RequestClaimInfoAsync(claim, report, actorUserId, trimmedReason!);
+            return await RequestClaimInfoAsync(claim, report, actorUserId, actor, trimmedReason!);
         }
 
         // ---- Rejected ----
+        var previousClaimStatus = claim.Status;
+
         claim.Status = "Rejected";
         claim.DecisionReason = trimmedReason;
         claim.DecisionAt = PhNow();
         claim.DecisionByUserId = actorUserId;
+
+        if (isAdmin)
+        {
+            claim.DecisionByName = actor!.FullName;
+            claim.DecisionByRole = actor.Role;
+
+            await _audit.StageAsync(
+                actorUserId,
+                "Claim Rejected",
+                "Claim",
+                claim.ClaimId,
+                previousClaimStatus,
+                claim.Status,
+                $"Claim on report #{claim.ReportId} ({report.ItemName}) rejected: {trimmedReason}");
+        }
 
         if (IsStatus(report.ReportType, "Lost"))
         {
@@ -1078,12 +1143,30 @@ public class LostFoundService
     /// and nothing is released in the meantime.
     /// </summary>
     private async Task<LostFoundResult> RequestClaimInfoAsync(
-        ClaimRecord claim, LostFoundReport report, int actorUserId, string message)
+        ClaimRecord claim, LostFoundReport report, int actorUserId,
+        LostFoundActor? actor, string message)
     {
+        var previousStatus = claim.Status;
+
         claim.Status = "InformationRequested";
         claim.DecisionReason = message.Trim();
         claim.DecisionAt = PhNow();
         claim.DecisionByUserId = actorUserId;
+
+        if (actor?.IsAdmin == true)
+        {
+            claim.DecisionByName = actor.FullName;
+            claim.DecisionByRole = actor.Role;
+
+            await _audit.StageAsync(
+                actorUserId,
+                "Claim Information Requested",
+                "Claim",
+                claim.ClaimId,
+                previousStatus,
+                claim.Status,
+                $"More information requested on report #{claim.ReportId} ({report.ItemName}): {message.Trim()}");
+        }
 
         // Schedules are cancelled: nothing is handed over while a claim
         // is being questioned.
@@ -1366,6 +1449,11 @@ public class LostFoundService
     /// </summary>
     public async Task<LostFoundResult> CompleteScheduleAsync(int adminId, int scheduleId, CompleteClaimScheduleDto dto)
     {
+        var actor = await _audit.GetActorAsync(adminId);
+        if (actor is null || !actor.IsAdmin)
+            return LostFoundResult.Forbidden(
+                "Only a Lost & Found administrator can record a handover.");
+
         var receivedName = NormalizeName(dto.ReceivedByName);
         var receivedStudentId = dto.ReceivedByStudentId?.Trim() ?? string.Empty;
 
@@ -1395,12 +1483,15 @@ public class LostFoundService
             return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
         var actualFinderUserId = await GetActualFinderUserIdAsync(report);
+        var previousScheduleStatus = schedule.Status;
 
         schedule.ReceivedByName = receivedName;
         schedule.ReceivedByStudentId = receivedStudentId;
         schedule.StudentId = receivedStudentId;
         schedule.VerifiedAt = PhNow();
         schedule.VerifiedByAdminId = adminId;
+        schedule.VerifiedByName = actor.FullName;
+        schedule.VerifiedByRole = actor.Role;
         schedule.CompletedAt = PhNow();
         schedule.Status = "Completed";
 
@@ -1486,6 +1577,17 @@ public class LostFoundService
             foreach (var otherSchedule in otherSchedules)
                 otherSchedule.Status = "Cancelled";
         }
+
+        // Stage the audit row before saving so the handover and its trail
+        // commit together: a completed pickup can never exist unlogged.
+        await _audit.StageAsync(
+            adminId,
+            "Pickup Completed",
+            "Pickup",
+            schedule.ScheduleId,
+            previousScheduleStatus,
+            "Completed",
+            $"Item {report.ItemName} (report #{report.ReportId}) released to {receivedName} ({receivedStudentId}).");
 
         await _db.SaveChangesAsync();
 
@@ -2304,7 +2406,7 @@ public class LostFoundService
             .Select(u => u.Role)
             .FirstOrDefaultAsync();
 
-        return role == "LostFoundAdmin" || role == "Admin" || role == "SuperAdmin";
+        return LostFoundRoles.IsLostFoundRole(role);
     }
 
     /// <summary>
@@ -2391,6 +2493,9 @@ public class LostFoundService
                     : $"/api/lostfound/claims/{c.ClaimId}/proof",
                 DecisionReason = c.DecisionReason,
                 DecisionAt = c.DecisionAt,
+                DecisionByUserId = c.DecisionByUserId,
+                DecisionByName = c.DecisionByName,
+                DecisionByRole = c.DecisionByRole,
             };
         }).ToList();
     }
@@ -2460,6 +2565,10 @@ public class LostFoundService
         ImagePath = r.ImagePath,
         ItemCustody = string.IsNullOrWhiteSpace(r.ItemCustody) ? "None" : r.ItemCustody,
         CreatedAt = r.CreatedAt,
+        ReviewedByUserId = r.ReviewedByUserId,
+        ReviewedByName = r.ReviewedByName,
+        ReviewedByRole = r.ReviewedByRole,
+        ReviewedAt = r.ReviewedAt,
     };
 
     /// <summary>
@@ -2566,6 +2675,8 @@ public class LostFoundService
             CompletedAt = s.CompletedAt,
             VerifiedAt = s.VerifiedAt,
             VerifiedByAdminId = s.VerifiedByAdminId,
+            VerifiedByName = s.VerifiedByName,
+            VerifiedByRole = s.VerifiedByRole,
         };
     }
 

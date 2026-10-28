@@ -658,7 +658,11 @@ public class AuthController : ControllerBase
                     ? fwd.Split(',')[0].Trim()[..Math.Min(fwd.Split(',')[0].Trim().Length, 64)]
                     : null,
                 CreatedAt = DateTime.UtcNow,
-                LastSeenAt = DateTime.UtcNow
+                LastSeenAt = DateTime.UtcNow,
+                // Matches the JWT lifetime below. An app closed without a
+                // sign-out still ends visibly as "Session Expired" instead
+                // of staying "Active" forever.
+                ExpiresAt = DateTime.UtcNow.AddHours(8)
             });
 
             await _context.SaveChangesAsync();
@@ -1163,7 +1167,7 @@ public class AuthController : ControllerBase
 
         var role = module switch
         {
-            "Lost & Found" => "LostFoundAdmin",
+            "Lost & Found" => "LostFoundSuperAdmin",
             "Clinic" => "ClinicAdmin",
             "Guidance" => "GuidanceAdmin",
             "Library" => "LibraryAdmin",
@@ -1224,7 +1228,7 @@ public class AuthController : ControllerBase
         var existingHead = await _context.Users
             .FirstOrDefaultAsync(x =>
                 x.AdminModule == module &&
-                (x.Role == role || x.Role == "Admin") &&
+                (x.Role == role || x.Role == "Admin" || x.Role == "LostFoundAdmin") &&
                 (x.AccountStatus == null || x.AccountStatus != "Deleted"));
 
         if (existingHead != null)
@@ -1409,6 +1413,8 @@ public class AuthController : ControllerBase
             "Admin",
             "SuperAdmin",
             "LostFoundAdmin",
+            "LostFoundSuperAdmin",
+            "LostFoundSubAdmin",
             "ClinicAdmin",
             "GuidanceAdmin",
             "LibraryAdmin",
@@ -1458,7 +1464,7 @@ public class AuthController : ControllerBase
 
                     user.Role = module switch
                     {
-                        "Lost & Found" => "LostFoundAdmin",
+                        "Lost & Found" => "LostFoundSuperAdmin",
                         "Clinic" => "ClinicAdmin",
                         "Guidance" => "GuidanceAdmin",
                         "Library" => "LibraryAdmin",
@@ -1468,6 +1474,8 @@ public class AuthController : ControllerBase
             }
             else if (
                 user.Role == "LostFoundAdmin" ||
+                user.Role == "LostFoundSuperAdmin" ||
+                user.Role == "LostFoundSubAdmin" ||
                 user.Role == "ClinicAdmin" ||
                 user.Role == "GuidanceAdmin" ||
                 user.Role == "LibraryAdmin")
