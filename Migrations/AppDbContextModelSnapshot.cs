@@ -948,7 +948,7 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<DateTime?>("FirstSemStart")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<int>("ReservationPickupDays")
+                    b.Property<int>("ReservationPickupMinutes")
                         .HasColumnType("int");
 
                     b.Property<DateTime?>("SecondSemEnd")

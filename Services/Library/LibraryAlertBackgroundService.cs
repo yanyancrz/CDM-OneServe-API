@@ -10,11 +10,11 @@ using Microsoft.Extensions.Logging;
 namespace CDM_OneServe_API.Services.Library;
 
 /// <summary>
-/// Runs once at startup, then every 6 hours:
+/// Runs once at startup, then every minute:
 ///   - books due within 1 day -> "due-soon" notification
 ///   - books past their due date -> "overdue" notification, repeated every
 ///     third day while the book stays out so the reminder keeps coming
-///   - reservations expiring within 1 day -> "expiring" notification
+///   - reservations expiring within 5 minutes -> "expiring" notification
 ///
 /// The deduplication is per event, per reminder, not per book: a reminder
 /// that has already been written for that exact day count is skipped, and
@@ -22,7 +22,7 @@ namespace CDM_OneServe_API.Services.Library;
 /// </summary>
 public class LibraryAlertBackgroundService : BackgroundService
 {
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(6);
+    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<LibraryAlertBackgroundService> _logger;
@@ -249,7 +249,7 @@ public class LibraryAlertBackgroundService : BackgroundService
     }
 
     // ---------------------------------------------------------
-    // EXPIRING RESERVATIONS: active reservations within 1 day
+    // EXPIRING RESERVATIONS: active reservations within 5 minutes
     // of their ExpirationDate
     // ---------------------------------------------------------
 
@@ -260,7 +260,7 @@ public class LibraryAlertBackgroundService : BackgroundService
     )
     {
         var now = DateTime.Now;
-        var threshold = now.AddDays(1);
+        var threshold = now.AddMinutes(5);
 
         // ReadyForPickup counts as active: the book is held at the
         // counter and the student still has to collect it.

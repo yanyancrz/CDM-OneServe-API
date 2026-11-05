@@ -5,17 +5,17 @@
 public static class LibraryDefaults
 {
     private sealed record Snapshot(
-        int StudentLimit, int FacultyLimit, int LoanDays, int PickupDays,
+        int StudentLimit, int FacultyLimit, int LoanDays, int PickupMinutes,
         DateTime? FirstSemStart, DateTime? FirstSemEnd,
         DateTime? SecondSemStart, DateTime? SecondSemEnd);
 
     // Factory values, used only until the database row is loaded.
-    private static volatile Snapshot _current = new(3, 5, 7, 3, null, null, null, null);
+    private static volatile Snapshot _current = new(3, 5, 7, 15, null, null, null, null);
 
     public static int StudentBorrowLimit => _current.StudentLimit;
     public static int FacultyBorrowLimit => _current.FacultyLimit;
     public static int DefaultLoanDays => _current.LoanDays;
-    public static int ReservationPickupDays => _current.PickupDays;
+    public static int ReservationPickupMinutes => _current.PickupMinutes;
 
     // The semester dates the Library Head configures. A late return bans the
     // patron until the end of the semester in progress.
@@ -33,10 +33,10 @@ public static class LibraryDefaults
             : StudentBorrowLimit;
 
     public static void Apply(
-        int studentLimit, int facultyLimit, int loanDays, int pickupDays,
+        int studentLimit, int facultyLimit, int loanDays, int pickupMinutes,
         DateTime? firstSemStart, DateTime? firstSemEnd,
         DateTime? secondSemStart, DateTime? secondSemEnd) =>
-        _current = new Snapshot(studentLimit, facultyLimit, loanDays, pickupDays,
+        _current = new Snapshot(studentLimit, facultyLimit, loanDays, pickupMinutes,
             firstSemStart, firstSemEnd, secondSemStart, secondSemEnd);
 
     /// <summary>

@@ -128,7 +128,7 @@ public class ReservationService
             ReservationAt = now,
 
             // Reservation is held for the pickup period in the Library Settings
-            ExpirationDate = now.AddDays(LibraryDefaults.ReservationPickupDays),
+            ExpirationDate = now.AddMinutes(LibraryDefaults.ReservationPickupMinutes),
 
             // Immediately active. No admin approval.
             Status = "Reserved",

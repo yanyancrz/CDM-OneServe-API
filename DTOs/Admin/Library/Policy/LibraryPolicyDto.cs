@@ -20,7 +20,7 @@ public class LibraryPolicySettingsDto
 
     public int DefaultLoanDays { get; set; }
 
-    public int ReservationPickupDays { get; set; }
+    public int ReservationPickupMinutes { get; set; }
 
     // Semester dates used for the late-return borrowing suspension.
     public DateTime? FirstSemStart { get; set; }

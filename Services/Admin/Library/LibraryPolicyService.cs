@@ -36,7 +36,7 @@ public class LibraryPolicyService : ILibraryPolicyService
                 StudentBorrowLimit = LibraryDefaults.StudentBorrowLimit,
                 FacultyBorrowLimit = LibraryDefaults.FacultyBorrowLimit,
                 DefaultLoanDays = LibraryDefaults.DefaultLoanDays,
-                ReservationPickupDays = LibraryDefaults.ReservationPickupDays,
+                ReservationPickupMinutes = LibraryDefaults.ReservationPickupMinutes,
                 FirstSemStart = LibraryDefaults.FirstSemStart,
                 FirstSemEnd = LibraryDefaults.FirstSemEnd,
                 SecondSemStart = LibraryDefaults.SecondSemStart,

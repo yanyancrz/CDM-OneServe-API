@@ -31,7 +31,7 @@ public class AdminSettingsService : IAdminSettingsService
 
     private static void Apply(LibrarySettings s) =>
         LibraryDefaults.Apply(s.StudentBorrowLimit, s.FacultyBorrowLimit,
-            s.DefaultLoanDays, s.ReservationPickupDays,
+            s.DefaultLoanDays, s.ReservationPickupMinutes,
             s.FirstSemStart, s.FirstSemEnd, s.SecondSemStart, s.SecondSemEnd);
 
     public async Task<LibrarySettingsDto> GetAsync(CancellationToken cancellationToken)
@@ -48,7 +48,7 @@ public class AdminSettingsService : IAdminSettingsService
                 StudentBorrowLimit = LibraryDefaults.StudentBorrowLimit,
                 FacultyBorrowLimit = LibraryDefaults.FacultyBorrowLimit,
                 DefaultLoanDays = LibraryDefaults.DefaultLoanDays,
-                ReservationPickupDays = LibraryDefaults.ReservationPickupDays,
+                ReservationPickupMinutes = LibraryDefaults.ReservationPickupMinutes,
                 FirstSemStart = LibraryDefaults.FirstSemStart,
                 FirstSemEnd = LibraryDefaults.FirstSemEnd,
                 SecondSemStart = LibraryDefaults.SecondSemStart,
@@ -86,12 +86,12 @@ public class AdminSettingsService : IAdminSettingsService
         }
 
         var before = $"limits {row.StudentBorrowLimit}/{row.FacultyBorrowLimit}, " +
-                     $"loan {row.DefaultLoanDays}d, pickup {row.ReservationPickupDays}d";
+                     $"loan {row.DefaultLoanDays}d, pickup {row.ReservationPickupMinutes}m";
 
         row.StudentBorrowLimit = dto.StudentBorrowLimit;
         row.FacultyBorrowLimit = dto.FacultyBorrowLimit;
         row.DefaultLoanDays = dto.DefaultLoanDays;
-        row.ReservationPickupDays = dto.ReservationPickupDays;
+        row.ReservationPickupMinutes = dto.ReservationPickupMinutes;
         row.FirstSemStart = dto.FirstSemStart;
         row.FirstSemEnd = dto.FirstSemEnd;
         row.SecondSemStart = dto.SecondSemStart;
@@ -100,7 +100,7 @@ public class AdminSettingsService : IAdminSettingsService
         row.UpdatedBy = headId;
 
         var after = $"limits {row.StudentBorrowLimit}/{row.FacultyBorrowLimit}, " +
-                    $"loan {row.DefaultLoanDays}d, pickup {row.ReservationPickupDays}d";
+                    $"loan {row.DefaultLoanDays}d, pickup {row.ReservationPickupMinutes}m";
 
         _activity.Add(headId, "LIBRARY_SETTINGS_UPDATED", $"changed the library settings ({before} to {after})");
 
@@ -123,8 +123,8 @@ public class AdminSettingsService : IAdminSettingsService
         if (!LibraryDefaults.LoanDayOptions.Contains(d.DefaultLoanDays))
             return $"The default loan period must be one of: {string.Join(", ", LibraryDefaults.LoanDayOptions)} days.";
 
-        if (d.ReservationPickupDays < 1 || d.ReservationPickupDays > 14)
-            return "The reservation pickup period must be between 1 and 14 days.";
+        if (d.ReservationPickupMinutes < 1 || d.ReservationPickupMinutes > 1440)
+            return "The reservation hold must be between 1 and 1440 minutes.";
 
         // Semester dates are optional. When both ends of a semester are set,
         // the start must not be after the end.
@@ -142,7 +142,7 @@ public class AdminSettingsService : IAdminSettingsService
         StudentBorrowLimit = s.StudentBorrowLimit,
         FacultyBorrowLimit = s.FacultyBorrowLimit,
         DefaultLoanDays = s.DefaultLoanDays,
-        ReservationPickupDays = s.ReservationPickupDays,
+        ReservationPickupMinutes = s.ReservationPickupMinutes,
         FirstSemStart = s.FirstSemStart,
         FirstSemEnd = s.FirstSemEnd,
         SecondSemStart = s.SecondSemStart,

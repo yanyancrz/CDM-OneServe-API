@@ -5,7 +5,7 @@ public class LibrarySettingsDto
     public int StudentBorrowLimit { get; set; }
     public int FacultyBorrowLimit { get; set; }
     public int DefaultLoanDays { get; set; }
-    public int ReservationPickupDays { get; set; }
+    public int ReservationPickupMinutes { get; set; }
 
     // Semester dates. A late return suspends the patron until the end of the
     // current semester. All four are optional.

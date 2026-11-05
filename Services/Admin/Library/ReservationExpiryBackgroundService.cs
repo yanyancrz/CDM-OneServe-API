@@ -3,13 +3,13 @@
 namespace CDM_OneServe_API.Services.Admin.Library;
 
 /// <summary>
-/// Runs once at startup, then every 5 minutes:
+/// Runs once at startup, then every minute:
 /// active reservations past their ExpirationDate become "Expired",
 /// and a copy held for a ReadyForPickup reservation goes back on the shelf.
 /// </summary>
 public class ReservationExpiryBackgroundService : BackgroundService
 {
-    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ReservationExpiryBackgroundService> _logger;

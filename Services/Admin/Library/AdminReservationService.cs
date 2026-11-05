@@ -834,9 +834,9 @@ public class AdminReservationService : IAdminReservationService
         }
     }
 
-    // The patron has until the end of the last pickup day.
+    // The patron has until the hold period runs out.
     private static DateTime PickupDeadline(DateTime now) =>
-        now.Date.AddDays(LibraryDefaults.ReservationPickupDays + 1).AddSeconds(-1);
+        now.AddMinutes(LibraryDefaults.ReservationPickupMinutes);
 
     private static string AppendRemark(string? existing, string note) =>
         string.IsNullOrWhiteSpace(existing) ? note : $"{existing.Trim()} | {note}";
