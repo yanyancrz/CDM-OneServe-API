@@ -293,15 +293,15 @@ public class AuthController : ControllerBase
 
         _context.Users.Add(user);
 
+
         var trackedRecord = await _context.SchoolRecords
-            .FirstOrDefaultAsync(x => x.Id == schoolRecord.Id);
+            .FirstOrDefaultAsync(x => x.IdNumber == schoolRecord.IdNumber);
 
         if (trackedRecord != null)
         {
             trackedRecord.IsUsed = true;
         }
-
-        await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync();
 
         // Send credentials email in the background so the HTTP response
         // is not blocked by the SMTP transaction.

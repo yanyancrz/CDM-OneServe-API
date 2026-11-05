@@ -15,15 +15,19 @@ public class ClinicController : ControllerBase
     private readonly AppDbContext _db;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<ClinicController> _logger;
+
 
     public ClinicController(
-        AppDbContext db,
-        IHttpClientFactory httpClientFactory,
-        IConfiguration configuration)
+    AppDbContext db,
+    IHttpClientFactory httpClientFactory,
+    IConfiguration configuration,
+    ILogger<ClinicController> logger)
     {
         _db = db;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
+        _logger = logger;
     }
 
     [HttpGet("{resource}")]
@@ -116,8 +120,13 @@ public class ClinicController : ControllerBase
         {
             throw;
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
+            _logger.LogError(
+                ex,
+                "Clinic CMS request failed for resource: {Resource}",
+                resource);
+
             return StatusCode(StatusCodes.Status502BadGateway,
                 new { message = "The Clinic CMS could not be reached." });
         }
