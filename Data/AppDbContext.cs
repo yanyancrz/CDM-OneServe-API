@@ -146,8 +146,22 @@ public class AppDbContext : DbContext
         // USER ACTIVITY
         // =========================
 
-        modelBuilder.Entity<UserActivity>()
-            .ToTable("user_activities");
+        // =========================
+        // USER ACTIVITY
+        // =========================
+
+
+        modelBuilder.Entity<UserActivity>(e =>
+        {
+            e.ToTable("user_activities");
+
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.Id)
+                .HasColumnName("Id")
+                .ValueGeneratedOnAdd();
+        });
+
 
 
         // =========================
@@ -188,13 +202,26 @@ public class AppDbContext : DbContext
         // SCHOOL RECORDS (official ID registry)
         // =========================
 
+
         modelBuilder.Entity<SchoolRecord>(e =>
         {
             e.ToTable("school_records");
+
+            e.HasKey(x => x.MyRowId);
+
+            e.Property(x => x.MyRowId)
+                .HasColumnName("my_row_id")
+                .ValueGeneratedOnAdd();
+
+            e.Property(x => x.Id)
+                .HasColumnName("Id");
+
             e.HasIndex(x => x.IdNumber).IsUnique();
+
             e.Property(x => x.IdNumber).HasMaxLength(50);
             e.Property(x => x.Role).HasMaxLength(20);
         });
+
 
         modelBuilder.Entity<LibraryAttendance>()
             .ToTable("library_attendance");
