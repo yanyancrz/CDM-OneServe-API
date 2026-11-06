@@ -23,7 +23,7 @@ namespace CDM_OneServe_API.Services.Guidance;
 /// </summary>
 public static class GuidanceNarrativeExportService
 {
-    private const string Institution = "Colegio de Dagupan";
+    private const string Institution = "Colegio de Montalban";
     private const string Office = "Guidance and Counseling Center";
 
     static GuidanceNarrativeExportService()
