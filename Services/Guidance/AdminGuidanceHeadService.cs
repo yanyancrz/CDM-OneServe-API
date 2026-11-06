@@ -84,6 +84,10 @@ public class AdminGuidanceHeadService
                 ["canManageCounselors"] = true,
                 ["canViewStudents"] = true,
                 ["canViewReports"] = true,
+                ["canViewNarrativeReports"] = true,
+                ["canExportNarrativeReports"] = true,
+                // Private counseling notes stay with the authoring counselor.
+                ["canViewPrivateNotes"] = false,
                 ["canManageSettings"] = true
             }
         });
@@ -713,6 +717,16 @@ public class AdminGuidanceHeadService
             .Take(50)
             .ToListAsync(ct);
 
+        var counselingHistory = await _context.GuidanceCounselingRecords.AsNoTracking()
+            .Where(r => r.StudentId == id)
+            .Include(r => r.Student)
+            .Include(r => r.Counselor)
+            .Include(r => r.Attachments)
+            .OrderByDescending(r => r.SessionDate)
+            .ThenByDescending(r => r.Id)
+            .Take(100)
+            .ToListAsync(ct);
+
         return GuidanceResult<GuidanceStudentDetailDto>.Ok(new GuidanceStudentDetailDto
         {
             UserId = base3.UserId,
@@ -740,6 +754,28 @@ public class AdminGuidanceHeadService
                 Status = a.Status,
                 CounselorName = a.Counselor?.FullName,
                 CreatedAt = GuidanceClock.FromUtc(a.CreatedAt)
+            }).ToList(),
+            CounselingHistory = counselingHistory.Select(r => new NarrativeReportListItemDto
+            {
+                Id = r.Id,
+                ReportNumber = r.ReportNumber,
+                ReportTitle = r.ReportTitle,
+                SubjectId = r.StudentId,
+                SubjectName = r.Student?.FullName ?? user.FullName,
+                SubjectIdNumber = r.Student?.IdNumber,
+                SubjectRole = r.Student?.Role ?? user.Role,
+                CounselorId = r.CounselorId,
+                CounselorName = r.Counselor?.FullName ?? "Counselor",
+                SessionDate = r.SessionDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                ConcernType = r.ConcernType,
+                Status = r.Status,
+                IsConfidential = r.IsConfidential,
+                HasPrivateNotes = !string.IsNullOrWhiteSpace(r.PrivateNotes),
+                AttachmentCount = r.Attachments.Count,
+                Version = r.Version,
+                FinalizedAt = r.FinalizedAt,
+                CreatedAt = r.CreatedAt,
+                UpdatedAt = r.UpdatedAt
             }).ToList()
         });
     }

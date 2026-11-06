@@ -25,11 +25,16 @@ public class GuidanceCounselorController : ControllerBase
 {
     private readonly GuidanceCounselorService _service;
     private readonly GuidanceChatService _chat;
+    private readonly GuidanceNarrativeService _narrative;
 
-    public GuidanceCounselorController(GuidanceCounselorService service, GuidanceChatService chat)
+    public GuidanceCounselorController(
+        GuidanceCounselorService service,
+        GuidanceChatService chat,
+        GuidanceNarrativeService narrative)
     {
         _service = service;
         _chat = chat;
+        _narrative = narrative;
     }
 
     private bool TryGetUserId(out int id) =>
@@ -127,6 +132,123 @@ public class GuidanceCounselorController : ControllerBase
     {
         if (!TryGetUserId(out var id)) return Invalid();
         return Map(await _service.UpsertRecordAsync(id, appointmentId, request, ct));
+    }
+
+    // --------------------------------------------------
+    // NARRATIVE REPORTS (canonical, DB-backed)
+    // --------------------------------------------------
+    [HttpGet("narrative-reports")]
+    public async Task<IActionResult> NarrativeReports(
+        [FromQuery] NarrativeReportFilterDto filter, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Ok(await _narrative.GetMineAsync(id, filter, ct));
+    }
+
+    [HttpGet("narrative-reports/stats")]
+    public async Task<IActionResult> NarrativeReportStats(CancellationToken ct)
+    {
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Ok(new { stats = await _narrative.GetMineStatsAsync(id, ct) });
+    }
+
+    [HttpGet("narrative-reports/subjects")]
+    public async Task<IActionResult> NarrativeSubjects(
+        [FromQuery] string? search, [FromQuery] int take = 50, CancellationToken ct = default)
+    {
+        if (!TryGetUserId(out _)) return Invalid();
+        return Ok(new { subjects = await _narrative.GetSubjectsAsync(search, take, ct) });
+    }
+
+    [HttpPost("narrative-reports")]
+    public async Task<IActionResult> CreateNarrativeReport(
+        [FromBody] CreateNarrativeReportRequest request, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var id)) return Invalid();
+        return Map(await _narrative.CreateAsync(id, request, ct));
+    }
+
+    [HttpGet("narrative-reports/{id:int}")]
+    public async Task<IActionResult> GetNarrativeReport(int id, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+        return Map(await _narrative.GetMineDetailAsync(counselorId, id, ct));
+    }
+
+    [HttpPut("narrative-reports/{id:int}")]
+    public async Task<IActionResult> UpdateNarrativeReport(
+        int id, [FromBody] UpdateNarrativeReportRequest request, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+        return Map(await _narrative.UpdateAsync(counselorId, id, request, ct));
+    }
+
+    [HttpPost("narrative-reports/{id:int}/finalize")]
+    public async Task<IActionResult> FinalizeNarrativeReport(int id, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+        return Map(await _narrative.FinalizeAsync(counselorId, id, ct));
+    }
+
+    [HttpPost("narrative-reports/{id:int}/archive")]
+    public async Task<IActionResult> ArchiveNarrativeReport(int id, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+        return Map(await _narrative.ArchiveAsync(counselorId, id, ct));
+    }
+
+    [HttpDelete("narrative-reports/{id:int}")]
+    public async Task<IActionResult> DeleteNarrativeReport(int id, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+        return Map(await _narrative.DeleteAsync(counselorId, id, ct));
+    }
+
+    [HttpPost("narrative-reports/{id:int}/attachments")]
+    public async Task<IActionResult> AddNarrativeAttachment(
+        int id, IFormFile file, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+        return Map(await _narrative.AddAttachmentAsync(counselorId, id, file, ct));
+    }
+
+    [HttpDelete("narrative-reports/{id:int}/attachments/{attachmentId:int}")]
+    public async Task<IActionResult> DeleteNarrativeAttachment(
+        int id, int attachmentId, CancellationToken ct)
+    {
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+        return Map(await _narrative.DeleteAttachmentAsync(counselorId, id, attachmentId, ct));
+    }
+
+    [HttpGet("narrative-reports/{id:int}/attachments/{attachmentId:int}/download")]
+    public async Task<IActionResult> DownloadNarrativeAttachment(
+        int id, int attachmentId, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store, private";
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+
+        var r = await _narrative.DownloadAttachmentAsync(
+            counselorId, GuidanceRoles.Counselor, isAdmin: false, id, attachmentId, ct);
+
+        return r.Success && r.Data != null
+            ? PhysicalFile(r.Data.FilePath, r.Data.ContentType, r.Data.FileName)
+            : StatusCode(r.Status, new { message = r.Message });
+    }
+
+    [HttpGet("narrative-reports/{id:int}/export")]
+    public async Task<IActionResult> ExportNarrativeReport(
+        int id, [FromQuery] string format = "docx", CancellationToken ct = default)
+    {
+        Response.Headers.CacheControl = "no-store, private";
+        if (!TryGetUserId(out var counselorId)) return Invalid();
+
+        var r = await _narrative.ExportMineAsync(counselorId, id, format, ct);
+
+        return r.Success && r.Data != null
+            ? File(r.Data.Bytes, r.Data.ContentType, r.Data.FileName)
+            : StatusCode(r.Status, new { message = r.Message });
     }
 
     [HttpGet("follow-ups")]

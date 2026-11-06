@@ -1,5 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 
+using CDM_OneServe_API.DTOs.Guidance;
+
 namespace CDM_OneServe_API.DTOs.Guidance.Admin;
 
 // =====================================================
@@ -203,6 +205,9 @@ public class GuidanceStudentDetailDto : GuidanceStudentListItemDto
     public string? ContactNumber { get; set; }
     public string? StudentStatus { get; set; }
     public List<GuidanceStudentAppointmentSummaryDto> AppointmentHistory { get; set; } = new();
+
+    /// <summary>Every narrative report about this person, across all counselors.</summary>
+    public List<NarrativeReportListItemDto> CounselingHistory { get; set; } = new();
 }
 
 public class GuidanceStudentAppointmentSummaryDto

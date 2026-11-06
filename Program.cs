@@ -129,6 +129,7 @@ builder.Services.AddScoped<GuidanceHolidayService>();
 
 // Guidance Head portal (desktop admin): settings + the /api/admin/guidance/* service.
 builder.Services.AddScoped<GuidanceSettingsService>();
+builder.Services.AddScoped<GuidanceNarrativeService>();
 builder.Services.AddScoped<AdminGuidanceHeadService>();
 
 // Unanswered Pending appointment requests past their date become Expired (hourly).

@@ -7,7 +7,7 @@ namespace CDM_OneServe_API.DTOs.Guidance;
 public class SessionRecordDto
 {
     public int Id { get; set; }
-    public int AppointmentId { get; set; }
+    public int? AppointmentId { get; set; }
     public int StudentId { get; set; }
     public string StudentName { get; set; } = "";
     public string? StudentNumber { get; set; }

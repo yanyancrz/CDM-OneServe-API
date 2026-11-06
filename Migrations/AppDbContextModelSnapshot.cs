@@ -467,7 +467,13 @@ namespace CDM_OneServe_API.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<int>("AppointmentId")
+                    b.Property<int?>("AppointmentId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ArchivedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("ArchivedBy")
                         .HasColumnType("int");
 
                     b.Property<string>("ConcernType")
@@ -479,21 +485,53 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<DateTime?>("FinalizedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("FinalizedBy")
+                        .HasColumnType("int");
+
+                    b.Property<string>("FollowUpPlan")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("Interventions")
+                        .HasColumnType("longtext");
+
                     b.Property<bool>("IsConfidential")
                         .HasColumnType("tinyint(1)");
+
+                    b.Property<int?>("LastEditedBy")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Observations")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("PrivateNotes")
                         .HasColumnType("longtext");
 
+                    b.Property<string>("Recommendations")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ReportNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)");
+
+                    b.Property<string>("ReportTitle")
+                        .HasColumnType("longtext");
+
                     b.Property<DateOnly>("SessionDate")
                         .HasColumnType("date");
+
+                    b.Property<string>("SessionObjectives")
+                        .HasColumnType("longtext");
 
                     b.Property<string>("SessionSummary")
                         .HasColumnType("longtext");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
 
                     b.Property<int>("StudentId")
                         .HasColumnType("int");
@@ -501,13 +539,19 @@ namespace CDM_OneServe_API.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AppointmentId");
 
-                    b.HasIndex("CounselorId");
+                    b.HasIndex("ReportNumber")
+                        .IsUnique();
 
-                    b.HasIndex("StudentId");
+                    b.HasIndex("CounselorId", "Status");
+
+                    b.HasIndex("StudentId", "SessionDate");
 
                     b.ToTable("guidance_counseling_records", (string)null);
                 });
@@ -637,6 +681,94 @@ namespace CDM_OneServe_API.Migrations
                     b.HasIndex("StudentId");
 
                     b.ToTable("guidance_follow_ups", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceNarrativeAttachment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<int>("RecordId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("StoredName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<DateTime>("UploadedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("UploadedBy")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RecordId");
+
+                    b.HasIndex("UploadedBy");
+
+                    b.ToTable("guidance_narrative_attachments", (string)null);
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceNarrativeReportEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<int?>("ActorId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ActorRole")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("RecordId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorId");
+
+                    b.HasIndex("RecordId", "CreatedAt");
+
+                    b.ToTable("guidance_narrative_report_events", (string)null);
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceSetting", b =>
@@ -1690,14 +1822,19 @@ namespace CDM_OneServe_API.Migrations
 
             modelBuilder.Entity("CDM_OneServe_API.Models.SchoolRecord", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<ulong>("MyRowId")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("my_row_id");
 
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("MyRowId"));
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Id")
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
 
                     b.Property<string>("IdNumber")
                         .IsRequired()
@@ -1712,7 +1849,7 @@ namespace CDM_OneServe_API.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("varchar(20)");
 
-                    b.HasKey("Id");
+                    b.HasKey("MyRowId");
 
                     b.HasIndex("IdNumber")
                         .IsUnique();
@@ -1803,7 +1940,8 @@ namespace CDM_OneServe_API.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
@@ -1997,8 +2135,7 @@ namespace CDM_OneServe_API.Migrations
                     b.HasOne("CDM_OneServe_API.Models.Guidance.GuidanceAppointment", "Appointment")
                         .WithMany()
                         .HasForeignKey("AppointmentId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Cascade);
 
                     b.HasOne("CDM_OneServe_API.Models.User", "Counselor")
                         .WithMany()
@@ -2065,6 +2202,43 @@ namespace CDM_OneServe_API.Migrations
                     b.Navigation("Record");
 
                     b.Navigation("Student");
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceNarrativeAttachment", b =>
+                {
+                    b.HasOne("CDM_OneServe_API.Models.Guidance.GuidanceCounselingRecord", "Record")
+                        .WithMany("Attachments")
+                        .HasForeignKey("RecordId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("CDM_OneServe_API.Models.User", "UploadedByUser")
+                        .WithMany()
+                        .HasForeignKey("UploadedBy")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Record");
+
+                    b.Navigation("UploadedByUser");
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceNarrativeReportEvent", b =>
+                {
+                    b.HasOne("CDM_OneServe_API.Models.User", "Actor")
+                        .WithMany()
+                        .HasForeignKey("ActorId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("CDM_OneServe_API.Models.Guidance.GuidanceCounselingRecord", "Record")
+                        .WithMany("Events")
+                        .HasForeignKey("RecordId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Actor");
+
+                    b.Navigation("Record");
                 });
 
             modelBuilder.Entity("CDM_OneServe_API.Models.Library.BorrowTransaction", b =>
@@ -2172,6 +2346,13 @@ namespace CDM_OneServe_API.Migrations
                         .IsRequired();
 
                     b.Navigation("Report");
+                });
+
+            modelBuilder.Entity("CDM_OneServe_API.Models.Guidance.GuidanceCounselingRecord", b =>
+                {
+                    b.Navigation("Attachments");
+
+                    b.Navigation("Events");
                 });
 #pragma warning restore 612, 618
         }

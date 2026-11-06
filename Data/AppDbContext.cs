@@ -95,6 +95,8 @@ public class AppDbContext : DbContext
     public DbSet<GuidanceAppointment> GuidanceAppointments { get; set; } = null!;
     public DbSet<GuidanceAppointmentReschedule> GuidanceAppointmentReschedules { get; set; } = null!;
     public DbSet<GuidanceCounselingRecord> GuidanceCounselingRecords { get; set; } = null!;
+    public DbSet<GuidanceNarrativeAttachment> GuidanceNarrativeAttachments { get; set; } = null!;
+    public DbSet<GuidanceNarrativeReportEvent> GuidanceNarrativeReportEvents { get; set; } = null!;
     public DbSet<GuidanceFollowUp> GuidanceFollowUps { get; set; } = null!;
     public DbSet<GuidanceChatConversation> GuidanceChatConversations { get; set; } = null!;
     public DbSet<GuidanceChatMessage> GuidanceChatMessages { get; set; } = null!;
@@ -270,9 +272,36 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<GuidanceCounselingRecord>(e =>
         {
             e.ToTable("guidance_counseling_records");
+            e.HasIndex(x => new { x.CounselorId, x.Status });
+            e.HasIndex(x => new { x.StudentId, x.SessionDate });
+            e.HasIndex(x => x.ReportNumber).IsUnique();
+            e.Property(x => x.ReportNumber).HasMaxLength(32);
+            e.Property(x => x.Status).HasMaxLength(20);
             e.HasOne(x => x.Appointment).WithMany().HasForeignKey(x => x.AppointmentId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Counselor).WithMany().HasForeignKey(x => x.CounselorId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<GuidanceNarrativeAttachment>(e =>
+        {
+            e.ToTable("guidance_narrative_attachments");
+            e.HasIndex(x => x.RecordId);
+            e.Property(x => x.FileName).HasMaxLength(255);
+            e.Property(x => x.StoredName).HasMaxLength(255);
+            e.Property(x => x.ContentType).HasMaxLength(120);
+            e.Property(x => x.Sha256).HasMaxLength(64);
+            e.HasOne(x => x.Record).WithMany(r => r.Attachments).HasForeignKey(x => x.RecordId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.UploadedByUser).WithMany().HasForeignKey(x => x.UploadedBy).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<GuidanceNarrativeReportEvent>(e =>
+        {
+            e.ToTable("guidance_narrative_report_events");
+            e.HasIndex(x => new { x.RecordId, x.CreatedAt });
+            e.Property(x => x.ActorRole).HasMaxLength(30);
+            e.Property(x => x.Action).HasMaxLength(40);
+            e.HasOne(x => x.Record).WithMany(r => r.Events).HasForeignKey(x => x.RecordId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Actor).WithMany().HasForeignKey(x => x.ActorId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<GuidanceFollowUp>(e =>

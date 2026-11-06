@@ -41,13 +41,20 @@ namespace CDM_OneServe_API.Controllers.Guidance;
 public class AdminGuidanceHeadController : ControllerBase
 {
     private readonly AdminGuidanceHeadService _service;
+    private readonly GuidanceNarrativeService _narrative;
     private readonly IWebHostEnvironment _env;
 
-    public AdminGuidanceHeadController(AdminGuidanceHeadService service, IWebHostEnvironment env)
+    public AdminGuidanceHeadController(
+        AdminGuidanceHeadService service,
+        GuidanceNarrativeService narrative,
+        IWebHostEnvironment env)
     {
         _service = service;
+        _narrative = narrative;
         _env = env;
     }
+
+    private string ActorRole => User.FindFirstValue(ClaimTypes.Role) ?? "GuidanceAdmin";
 
     // --------------------------------------------------
     // ACCESS
@@ -136,9 +143,88 @@ public class AdminGuidanceHeadController : ControllerBase
         Ok(ApiResponse.Ok(await _service.GetReportsAsync(days, ct)));
 
     // --------------------------------------------------
-    // NARRATIVE REPORT REPOSITORY
+    // NARRATIVE REPORTS (canonical, DB-backed, all counselors)
     // --------------------------------------------------
-    [HttpGet("reports/narrative")]
+    [HttpGet("narrative-reports")]
+    public async Task<IActionResult> GetNarrativeReports(
+        [FromQuery] NarrativeReportFilterDto filter, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return Ok(ApiResponse.Ok(await _narrative.GetAdminListAsync(filter, ct)));
+    }
+
+    [HttpGet("narrative-reports/stats")]
+    public async Task<IActionResult> GetNarrativeReportStats(CancellationToken ct) =>
+        Ok(ApiResponse.Ok(await _narrative.GetAdminStatsAsync(ct)));
+
+    [HttpGet("narrative-reports/subjects")]
+    public async Task<IActionResult> GetNarrativeSubjects(
+        [FromQuery] string? search, [FromQuery] int take = 50, CancellationToken ct = default) =>
+        Ok(ApiResponse.Ok(await _narrative.GetSubjectsAsync(search, take, ct)));
+
+    [HttpGet("narrative-reports/{id:int}")]
+    public async Task<IActionResult> GetNarrativeReport(int id, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+        return ToAction(await _narrative.GetAdminDetailAsync(userId, ActorRole, id, recordView: true, ct));
+    }
+
+    [HttpGet("narrative-reports/{id:int}/events")]
+    public async Task<IActionResult> GetNarrativeReportEvents(int id, CancellationToken ct) =>
+        Ok(ApiResponse.Ok(await _narrative.GetEventsAsync(id, ct)));
+
+    [HttpGet("students/{id:int}/narrative-reports")]
+    public async Task<IActionResult> GetStudentNarrativeReports(
+        int id, [FromQuery] NarrativeReportFilterDto filter, CancellationToken ct)
+    {
+        filter.StudentId = id;
+        return Ok(ApiResponse.Ok(await _narrative.GetAdminListAsync(filter, ct)));
+    }
+
+    [HttpGet("counselors/{id:int}/narrative-reports")]
+    public async Task<IActionResult> GetCounselorNarrativeReports(
+        int id, [FromQuery] NarrativeReportFilterDto filter, CancellationToken ct)
+    {
+        filter.CounselorId = id;
+        return Ok(ApiResponse.Ok(await _narrative.GetAdminListAsync(filter, ct)));
+    }
+
+    [HttpGet("narrative-reports/{id:int}/attachments/{attachmentId:int}/download")]
+    public async Task<IActionResult> DownloadNarrativeAttachment(
+        int id, int attachmentId, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store, private";
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+
+        var r = await _narrative.DownloadAttachmentAsync(
+            userId, ActorRole, isAdmin: true, id, attachmentId, ct);
+
+        return r.Success && r.Data != null
+            ? PhysicalFile(r.Data.FilePath, r.Data.ContentType, r.Data.FileName)
+            : StatusCode(r.Status, ApiResponse.Fail(r.Message ?? "Request failed."));
+    }
+
+    [HttpGet("narrative-reports/{id:int}/export")]
+    public async Task<IActionResult> ExportNarrativeReport(
+        int id, [FromQuery] string format = "docx", CancellationToken ct = default)
+    {
+        Response.Headers.CacheControl = "no-store, private";
+        if (!TryGetUserId(out var userId)) return InvalidSession();
+
+        var r = await _narrative.ExportAdminAsync(userId, ActorRole, id, format, ct);
+
+        return r.Success && r.Data != null
+            ? File(r.Data.Bytes, r.Data.ContentType, r.Data.FileName)
+            : StatusCode(r.Status, ApiResponse.Fail(r.Message ?? "Request failed."));
+    }
+
+    // --------------------------------------------------
+    // LEGACY NARRATIVE FILE REPOSITORY
+    // Kept for existing uploaded files; the canonical database-backed reports
+    // live under /narrative-reports above.
+    // --------------------------------------------------
+    [HttpGet("reports/narrative/files")]
     public IActionResult GetNarrativeReports()
     {
         var dir = GetNarrativeDir();
@@ -158,7 +244,7 @@ public class AdminGuidanceHeadController : ControllerBase
         return Ok(ApiResponse.Ok(files));
     }
 
-    [HttpPost("reports/narrative")]
+    [HttpPost("reports/narrative/files")]
     public async Task<IActionResult> UploadNarrativeReport(IFormFile file, CancellationToken ct)
     {
         if (file == null || file.Length == 0) return BadRequest(ApiResponse.Fail("No file uploaded."));
@@ -186,7 +272,7 @@ public class AdminGuidanceHeadController : ControllerBase
         }, "Uploaded."));
     }
 
-    [HttpDelete("reports/narrative/{id}")]
+    [HttpDelete("reports/narrative/files/{id}")]
     public IActionResult DeleteNarrativeReport(string id)
     {
         var dir = GetNarrativeDir();
@@ -196,7 +282,7 @@ public class AdminGuidanceHeadController : ControllerBase
         return Ok(ApiResponse.Ok<object?>(null, "Deleted."));
     }
 
-    [HttpPost("reports/narrative/{id}/rename")]
+    [HttpPost("reports/narrative/files/{id}/rename")]
     public IActionResult RenameNarrativeReport(string id, [FromQuery] string newName)
     {
         var dir = GetNarrativeDir();

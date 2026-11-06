@@ -839,6 +839,13 @@ public class GuidanceCounselorService
         var record = await _context.GuidanceCounselingRecords
             .FirstOrDefaultAsync(r => r.AppointmentId == appointmentId && r.CounselorId == counselorId, ct);
 
+        // A finalized narrative report is immutable and auditable. The old
+        // workbook allowed overwriting it, which would erase the finalized
+        // content without a trace.
+        if (record != null && (record.Status == "Finalized" || record.Status == "Archived"))
+            return GuidanceResult<SessionRecordDto>.Fail(409,
+                $"This session record is already {record.Status.ToLowerInvariant()} and can no longer be edited.");
+
         if (record == null)
         {
             record = new GuidanceCounselingRecord
@@ -847,6 +854,7 @@ public class GuidanceCounselorService
                 StudentId = appt.StudentId,
                 CounselorId = counselorId,
                 SessionDate = appt.Date,
+                LastEditedBy = counselorId
             };
             _context.GuidanceCounselingRecords.Add(record);
         }
@@ -855,10 +863,30 @@ public class GuidanceCounselorService
         record.SessionSummary = string.IsNullOrWhiteSpace(req.SessionSummary) ? null : req.SessionSummary.Trim();
         record.PrivateNotes = string.IsNullOrWhiteSpace(req.PrivateNotes) ? null : req.PrivateNotes.Trim();
         record.IsConfidential = req.IsConfidential;
-        record.Status = req.Status;
+        record.ReportTitle ??= $"Counseling Session - {appt.Date:yyyy-MM-dd}";
+        record.LastEditedBy = counselorId;
         record.UpdatedAt = DateTime.UtcNow;
 
+        var finalizing = req.Status == "Finalized";
+
+        if (finalizing)
+        {
+            record.Status = "Finalized";
+            record.FinalizedAt ??= DateTime.UtcNow;
+            record.FinalizedBy ??= counselorId;
+        }
+        else
+        {
+            record.Status = "Draft";
+        }
+
         await _context.SaveChangesAsync(ct);
+
+        if (finalizing && string.IsNullOrWhiteSpace(record.ReportNumber))
+        {
+            record.ReportNumber = $"GR-{GuidanceClock.Today.Year}-{record.Id:D5}";
+            await _context.SaveChangesAsync(ct);
+        }
 
         await _context.Entry(record).Reference(r => r.Student).LoadAsync(ct);
         return GuidanceResult<SessionRecordDto>.Ok(ToRecordDto(record),

@@ -98,13 +98,25 @@ public class GuidanceAppointmentReschedule
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
+/// <summary>
+/// A counseling record is also the canonical narrative report. Records written
+/// from a completed appointment keep their AppointmentId; a counselor may also
+/// write a report about a student/faculty member without an appointment, in
+/// which case AppointmentId is null.
+/// </summary>
 public class GuidanceCounselingRecord
 {
     public int Id { get; set; }
-    public int AppointmentId { get; set; }
+
+    /// <summary>Null for a narrative report written outside an appointment.</summary>
+    public int? AppointmentId { get; set; }
     public GuidanceAppointment? Appointment { get; set; }
+
+    /// <summary>The subject: an existing Users row (Student or Faculty).</summary>
     public int StudentId { get; set; }
     public User? Student { get; set; }
+
+    /// <summary>Always the authenticated counselor from the JWT.</summary>
     public int CounselorId { get; set; }
     public User? Counselor { get; set; }
 
@@ -114,10 +126,74 @@ public class GuidanceCounselingRecord
     public string? PrivateNotes { get; set; }
     public bool IsConfidential { get; set; }
 
-    /// <summary>Draft or Finalized.</summary>
+    // ---- Narrative report fields -------------------------------------
+    public string? ReportTitle { get; set; }
+    public string? SessionObjectives { get; set; }
+    public string? Observations { get; set; }
+    public string? Interventions { get; set; }
+    public string? Recommendations { get; set; }
+    public string? FollowUpPlan { get; set; }
+
+    /// <summary>Human reference assigned when the report is finalized.</summary>
+    public string? ReportNumber { get; set; }
+    public int Version { get; set; } = 1;
+
+    /// <summary>Draft, Finalized or Archived.</summary>
     public string Status { get; set; } = "Draft";
+
+    public DateTime? FinalizedAt { get; set; }
+    public int? FinalizedBy { get; set; }
+    public DateTime? ArchivedAt { get; set; }
+    public int? ArchivedBy { get; set; }
+    public int? LastEditedBy { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    public List<GuidanceNarrativeAttachment> Attachments { get; set; } = new();
+    public List<GuidanceNarrativeReportEvent> Events { get; set; } = new();
+}
+
+/// <summary>
+/// A supporting file for a narrative report. Files are stored OUTSIDE wwwroot
+/// (App_Data/guidance-narrative) and are only reachable through an authorized
+/// download endpoint that writes an audit event.
+/// </summary>
+public class GuidanceNarrativeAttachment
+{
+    public int Id { get; set; }
+    public int RecordId { get; set; }
+    public GuidanceCounselingRecord? Record { get; set; }
+
+    public string FileName { get; set; } = "";
+    public string StoredName { get; set; } = "";
+    public string ContentType { get; set; } = "application/octet-stream";
+    public long SizeBytes { get; set; }
+    public string Sha256 { get; set; } = "";
+
+    public int UploadedBy { get; set; }
+    public User? UploadedByUser { get; set; }
+    public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// Immutable audit trail for a narrative report: create/update/finalize/archive,
+/// admin views, attachment downloads and exports.
+/// </summary>
+public class GuidanceNarrativeReportEvent
+{
+    public long Id { get; set; }
+    public int RecordId { get; set; }
+    public GuidanceCounselingRecord? Record { get; set; }
+
+    public int? ActorId { get; set; }
+    public User? Actor { get; set; }
+    public string ActorRole { get; set; } = "";
+
+    /// <summary>Created, Updated, Finalized, Archived, Viewed, Exported, AttachmentAdded, AttachmentDownloaded, AttachmentDeleted.</summary>
+    public string Action { get; set; } = "";
+    public string? Detail { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 public class GuidanceFollowUp
