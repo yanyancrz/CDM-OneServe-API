@@ -209,14 +209,12 @@ public class AppDbContext : DbContext
         {
             e.ToTable("school_records");
 
-            e.HasKey(x => x.MyRowId);
-
-            e.Property(x => x.MyRowId)
-                .HasColumnName("my_row_id")
-                .ValueGeneratedOnAdd();
-
-            e.Property(x => x.Id)
-                .HasColumnName("Id");
+            // The Id column is the table's AUTO_INCREMENT primary key.
+            // (Some earlier database copies were created with MySQL 8.4's
+            // generated invisible primary key "my_row_id"; mapping that
+            // column made every registration fail with "Unknown column
+            // 's.my_row_id'" on databases without it.)
+            e.HasKey(x => x.Id);
 
             e.HasIndex(x => x.IdNumber).IsUnique();
 

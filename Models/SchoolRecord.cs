@@ -8,8 +8,6 @@ namespace CDM_OneServe_API.Models;
 // =========================================================
 public class SchoolRecord
 {
-    public ulong MyRowId { get; set; }
-
     public int Id { get; set; }
 
     public string IdNumber { get; set; } = "";

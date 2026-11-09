@@ -1822,19 +1822,15 @@ namespace CDM_OneServe_API.Migrations
 
             modelBuilder.Entity("CDM_OneServe_API.Models.SchoolRecord", b =>
                 {
-                    b.Property<ulong>("MyRowId")
+                    b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("my_row_id");
+                        .HasColumnType("int")
+                        .HasColumnName("Id");
 
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("MyRowId"));
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
-
-                    b.Property<int>("Id")
-                        .HasColumnType("int")
-                        .HasColumnName("Id");
 
                     b.Property<string>("IdNumber")
                         .IsRequired()
@@ -1849,7 +1845,7 @@ namespace CDM_OneServe_API.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("varchar(20)");
 
-                    b.HasKey("MyRowId");
+                    b.HasKey("Id");
 
                     b.HasIndex("IdNumber")
                         .IsUnique();
