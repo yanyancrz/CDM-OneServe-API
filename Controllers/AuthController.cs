@@ -33,6 +33,7 @@ public class AuthController : ControllerBase
     private readonly AdminAuditService _audit;
     private readonly SystemSettingsService _settings;
     private readonly PermissionService _permissions;
+    private readonly ILogger<AuthController> _logger;
 
     public AuthController(
         AppDbContext context,
@@ -42,7 +43,8 @@ public class AuthController : ControllerBase
         SecurityEventService security,
         AdminAuditService audit,
         SystemSettingsService settings,
-        PermissionService permissions)
+        PermissionService permissions,
+        ILogger<AuthController> logger)
     {
         _context = context;
         _emailService = emailService;
@@ -52,6 +54,7 @@ public class AuthController : ControllerBase
         _audit = audit;
         _settings = settings;
         _permissions = permissions;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -600,8 +603,20 @@ public class AuthController : ControllerBase
         // PASSWORD
         // =====================================================
 
-        var lockoutEnabled =
-            await _settings.GetBoolAsync("security.lockout.enabled");
+        // Lockout is optional security policy. If its settings table is
+        // unavailable, keep the existing login path working with lockout
+        // disabled rather than turning every sign-in into an HTTP 500.
+        var lockoutEnabled = false;
+        try
+        {
+            lockoutEnabled =
+                await _settings.GetBoolAsync("security.lockout.enabled");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Could not load optional login lockout setting; continuing with lockout disabled.");
+        }
 
         if (lockoutEnabled &&
             user.LockoutUntil is { } lockoutUntil &&
