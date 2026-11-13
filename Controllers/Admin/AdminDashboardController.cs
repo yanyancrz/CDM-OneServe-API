@@ -90,12 +90,9 @@ public class AdminDashboardController : AdminPlatformControllerBase
                 })
                 .ToList();
 
-            // Module usage comes from the existing module tables. Clinic usage
-            // comes only from sanitized CMS integration logs; no medical rows
-            // or payloads are read by this dashboard.
-            var studentIds = await users.Where(u => u.Role == "Student")
-                .Select(u => u.Id).ToListAsync(ct);
-            var studentIdSet = studentIds.ToHashSet();
+            // Count each registered, non-deleted user once per service.
+            var userIds = await users.Select(u => u.Id).ToListAsync(ct);
+            var userIdSet = userIds.ToHashSet();
 
             var libraryUserIds = new HashSet<int>();
             libraryUserIds.UnionWith(await _context.BorrowTransactions.Select(x => x.UserId).Distinct().ToListAsync(ct));
@@ -112,21 +109,21 @@ public class AdminDashboardController : AdminPlatformControllerBase
             guidanceUserIds.UnionWith(await _context.GuidanceCounselingRecords.Select(x => x.StudentId).Distinct().ToListAsync(ct));
             guidanceUserIds.UnionWith(await _context.GuidanceChatConversations.Select(x => x.StudentId).Distinct().ToListAsync(ct));
 
-            var clinicUserIds = await _context.ClinicIntegrationLogs.AsNoTracking()
-                .Where(x => x.Success && x.UserId != null)
-                .Select(x => x.UserId!.Value).Distinct().ToListAsync(ct);
+            // This activity is recorded only after a non-empty medical-record response.
+            var clinicUserIds = await _context.UserActivities.AsNoTracking()
+                .Where(x => x.Action == UserActivityActions.ClinicRecordsViewed)
+                .Select(x => x.UserId).Distinct().ToListAsync(ct);
 
-            var clinicSummary = await _clinic.GetSummaryAsync(ct);
             var health = await _health.CheckAllAsync(ct);
             var clinicHealth = health.Components
                 .FirstOrDefault(x => x.Component == "clinic_cms")?.Status ?? "unknown";
 
             var modules = new[]
             {
-                new { name = "Lost & Found", icon = "🔍", status = await ModuleStatusAsync("modules.lostfound.enabled", ct), studentCount = (int?)lostFoundUserIds.Count(studentIdSet.Contains), activityCount = (int?)null, usageNote = "students with a report or claim", path = (string?)"/lost-found/admin" },
-                new { name = "Library", icon = "📚", status = await ModuleStatusAsync("modules.library.enabled", ct), studentCount = (int?)libraryUserIds.Count(studentIdSet.Contains), activityCount = (int?)null, usageNote = "students who attended, borrowed or reserved", path = (string?)"/admin/library" },
-                new { name = "Clinic", icon = "🏥", status = clinicHealth, studentCount = (int?)clinicUserIds.Count(studentIdSet.Contains), activityCount = (int?)clinicSummary.Calls24h, usageNote = "successful CMS users; integration calls in the last 24 hours", path = (string?)null },
-                new { name = "Guidance", icon = "💬", status = await ModuleStatusAsync("modules.guidance.enabled", ct), studentCount = (int?)guidanceUserIds.Count(studentIdSet.Contains), activityCount = (int?)null, usageNote = "students with an appointment, session or chat", path = (string?)"/admin/guidance" }
+                new { name = "Lost & Found", icon = "🔍", status = await ModuleStatusAsync("modules.lostfound.enabled", ct), userCount = (int?)lostFoundUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users with a report or claim", path = (string?)"/lost-found/admin" },
+                new { name = "Library", icon = "📚", status = await ModuleStatusAsync("modules.library.enabled", ct), userCount = (int?)libraryUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users who attended, borrowed, reserved or used the library", path = (string?)"/admin/library" },
+                new { name = "Clinic", icon = "🏥", status = clinicHealth, userCount = (int?)clinicUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users with confirmed medical records in OneServe", path = (string?)null },
+                new { name = "Guidance", icon = "💬", status = await ModuleStatusAsync("modules.guidance.enabled", ct), userCount = (int?)guidanceUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users with an appointment, session or chat", path = (string?)"/admin/guidance" }
             };
 
             var recentActivities = await _context.AdminActivityLogs.AsNoTracking()
