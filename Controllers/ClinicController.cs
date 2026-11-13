@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text.Json;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.Models;
+using CDM_OneServe_API.Services.Admin.Platform;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,18 +20,24 @@ public class ClinicController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<ClinicController> _logger;
+    private readonly ClinicIntegrationLogger _integrationLog;
+    private readonly SystemSettingsService _settings;
 
 
     public ClinicController(
     AppDbContext db,
     IHttpClientFactory httpClientFactory,
     IConfiguration configuration,
-    ILogger<ClinicController> logger)
+    ILogger<ClinicController> logger,
+    ClinicIntegrationLogger integrationLog,
+    SystemSettingsService settings)
     {
         _db = db;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
+        _integrationLog = integrationLog;
+        _settings = settings;
     }
 
     [HttpGet("{resource}")]
@@ -48,6 +56,14 @@ public class ClinicController : ControllerBase
 
         if (!allowedResources.Contains(resource))
             return NotFound();
+
+        // The admin portal can switch Clinic access off without touching the
+        // external CMS. Checked live so a change takes effect immediately.
+        if (!await _settings.GetBoolAsync("clinic.access.enabled", cancellationToken))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { message = "Clinic access is temporarily disabled by the administrator." });
+        }
 
         var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
@@ -99,6 +115,8 @@ public class ClinicController : ControllerBase
         request.Headers.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
 
+        var stopwatch = Stopwatch.StartNew();
+
         try
         {
             using var response = await client.SendAsync(
@@ -107,6 +125,22 @@ public class ClinicController : ControllerBase
                 cancellationToken);
 
             var content = await response.Content.ReadAsStringAsync(
+                cancellationToken);
+
+            stopwatch.Stop();
+
+            // Integration telemetry for the Clinic service page. Stored
+            // without the student number, the key or any medical payload.
+            await _integrationLog.LogAsync(
+                user.Id,
+                resource,
+                endpoint,
+                (int)response.StatusCode,
+                (int)stopwatch.ElapsedMilliseconds,
+                response.IsSuccessStatusCode,
+                response.IsSuccessStatusCode
+                    ? null
+                    : $"HTTP {(int)response.StatusCode}",
                 cancellationToken);
 
             // The dashboard has no direct access to the Clinic CMS, so remember
@@ -145,10 +179,22 @@ public class ClinicController : ControllerBase
         }
         catch (HttpRequestException ex)
         {
+            stopwatch.Stop();
+
             _logger.LogError(
                 ex,
                 "Clinic CMS request failed for resource: {Resource}",
                 resource);
+
+            await _integrationLog.LogAsync(
+                user.Id,
+                resource,
+                endpoint,
+                null,
+                (int)stopwatch.ElapsedMilliseconds,
+                false,
+                "The Clinic CMS could not be reached.",
+                cancellationToken);
 
             return StatusCode(StatusCodes.Status502BadGateway,
                 new { message = "The Clinic CMS could not be reached." });

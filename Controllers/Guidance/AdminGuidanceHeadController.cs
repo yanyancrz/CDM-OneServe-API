@@ -91,7 +91,9 @@ public class AdminGuidanceHeadController : ControllerBase
     // --------------------------------------------------
     [HttpGet("dashboard/overview")]
     public async Task<IActionResult> GetOverview(CancellationToken ct) =>
-        Ok(ApiResponse.Ok(await _service.GetOverviewAsync(ct)));
+        Ok(ApiResponse.Ok(await _service.GetOverviewAsync(
+            ct,
+            includeRecentActivity: !User.IsInRole("Admin") && !User.IsInRole("SuperAdmin"))));
 
     // --------------------------------------------------
     // COUNSELORS

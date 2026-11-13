@@ -1,5 +1,6 @@
 using CDM_OneServe_API.Models;
 using CDM_OneServe_API.Models.Library;
+using CDM_OneServe_API.Models.Platform;
 using Microsoft.EntityFrameworkCore;
 using CDM_OneServe_API.Models.Guidance;
 using LF = CDM_OneServe_API.Models.LostFound;
@@ -63,6 +64,19 @@ public class AppDbContext : DbContext
     public DbSet<AdminActivityLog> AdminActivityLogs { get; set; }
 
     public DbSet<AdminNotificationPreference> AdminNotificationPreferences { get; set; }
+
+    // =========================
+    // ADMIN PLATFORM (central admin / super admin)
+    // =========================
+
+    public DbSet<CDM_OneServe_API.Models.Platform.RolePermission> RolePermissions { get; set; } = null!;
+    public DbSet<CDM_OneServe_API.Models.Platform.UserPermissionOverride> UserPermissionOverrides { get; set; } = null!;
+    public DbSet<CDM_OneServe_API.Models.Platform.SecurityEvent> SecurityEvents { get; set; } = null!;
+    public DbSet<CDM_OneServe_API.Models.Platform.SystemSetting> SystemSettings { get; set; } = null!;
+    public DbSet<CDM_OneServe_API.Models.Platform.SystemHealthSnapshot> SystemHealthChecks { get; set; } = null!;
+    public DbSet<CDM_OneServe_API.Models.Platform.DatabaseBackupRecord> DatabaseBackupRecords { get; set; } = null!;
+    public DbSet<CDM_OneServe_API.Models.Platform.DatabaseRestoreRequest> DatabaseRestoreRequests { get; set; } = null!;
+    public DbSet<CDM_OneServe_API.Models.Platform.ClinicIntegrationLog> ClinicIntegrationLogs { get; set; } = null!;
 
 
     public DbSet<LibrarySettings> LibrarySettingsRecords { get; set; }
@@ -438,6 +452,96 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<LF.PickupAvailability>(e =>
         {
             e.ToTable("PickupAvailabilities");
+        });
+
+        // =========================
+        // ADMIN PLATFORM (central admin / super admin)
+        // Additive tables only; see Models/Platform/PlatformEntities.cs.
+        // =========================
+
+        modelBuilder.Entity<RolePermission>(e =>
+        {
+            e.ToTable("role_permissions");
+            e.HasIndex(x => new { x.Role, x.PermissionKey }).IsUnique();
+            e.Property(x => x.Role).HasMaxLength(50);
+            e.Property(x => x.PermissionKey).HasMaxLength(40);
+            e.Property(x => x.Level).HasMaxLength(20);
+        });
+
+        modelBuilder.Entity<UserPermissionOverride>(e =>
+        {
+            e.ToTable("user_permission_overrides");
+            e.HasIndex(x => new { x.UserId, x.PermissionKey }).IsUnique();
+            e.Property(x => x.PermissionKey).HasMaxLength(40);
+            e.Property(x => x.Level).HasMaxLength(20);
+            e.Property(x => x.Reason).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<SecurityEvent>(e =>
+        {
+            e.ToTable("security_events");
+            e.HasIndex(x => new { x.EventType, x.CreatedAt });
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
+            e.HasIndex(x => x.CreatedAt);
+            e.Property(x => x.EventType).HasMaxLength(60);
+            e.Property(x => x.Severity).HasMaxLength(20);
+            e.Property(x => x.Email).HasMaxLength(255);
+            e.Property(x => x.IdNumber).HasMaxLength(50);
+            e.Property(x => x.IpAddress).HasMaxLength(64);
+            e.Property(x => x.UserAgent).HasMaxLength(500);
+            e.Property(x => x.DeviceLabel).HasMaxLength(120);
+            e.Property(x => x.Details).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<SystemSetting>(e =>
+        {
+            e.ToTable("system_settings");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasMaxLength(100);
+            e.Property(x => x.Value).HasMaxLength(2000);
+            e.Property(x => x.ValueType).HasMaxLength(20);
+            e.Property(x => x.Category).HasMaxLength(60);
+            e.Property(x => x.Description).HasMaxLength(300);
+        });
+
+        modelBuilder.Entity<SystemHealthSnapshot>(e =>
+        {
+            e.ToTable("system_health_checks");
+            e.HasIndex(x => new { x.Component, x.CheckedAt });
+            e.Property(x => x.Component).HasMaxLength(40);
+            e.Property(x => x.Status).HasMaxLength(20);
+            e.Property(x => x.Message).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<DatabaseBackupRecord>(e =>
+        {
+            e.ToTable("database_backup_records");
+            e.HasIndex(x => x.RequestedAt);
+            e.Property(x => x.Status).HasMaxLength(20);
+            e.Property(x => x.Source).HasMaxLength(30);
+            e.Property(x => x.StorageReference).HasMaxLength(300);
+            e.Property(x => x.FailureReason).HasMaxLength(500);
+            e.Property(x => x.Notes).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<DatabaseRestoreRequest>(e =>
+        {
+            e.ToTable("database_restore_requests");
+            e.HasIndex(x => new { x.Status, x.CreatedAt });
+            e.Property(x => x.Status).HasMaxLength(20);
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.Property(x => x.RejectionReason).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<ClinicIntegrationLog>(e =>
+        {
+            e.ToTable("clinic_integration_logs");
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => new { x.Success, x.CreatedAt });
+            e.Property(x => x.Resource).HasMaxLength(40);
+            e.Property(x => x.Method).HasMaxLength(10);
+            e.Property(x => x.Endpoint).HasMaxLength(300);
+            e.Property(x => x.ErrorMessage).HasMaxLength(300);
         });
     }
 }

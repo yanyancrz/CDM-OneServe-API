@@ -17,6 +17,14 @@ namespace CDM_OneServe_API.Hubs;
 [Authorize]
 public class GuidanceHub : Hub
 {
+    /// <summary>
+    /// Live connection count for the system-monitoring page. In-process and
+    /// approximate on purpose: it is telemetry, never an authorisation input.
+    /// </summary>
+    private static int _activeConnections;
+
+    public static int ActiveConnections => Volatile.Read(ref _activeConnections);
+
     private readonly AppDbContext _context;
 
     public GuidanceHub(AppDbContext context)
@@ -29,7 +37,16 @@ public class GuidanceHub : Hub
         if (TryUserId(Context.User, out var id))
             await Groups.AddToGroupAsync(Context.ConnectionId, $"user:{id}");
 
+        Interlocked.Increment(ref _activeConnections);
+
         await base.OnConnectedAsync();
+    }
+
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        Interlocked.Decrement(ref _activeConnections);
+
+        await base.OnDisconnectedAsync(exception);
     }
 
     public async Task JoinConversation(int conversationId)

@@ -13,11 +13,11 @@ public static class LibraryRoles
     /// <summary>Library Staff (created by the Library Head).</summary>
     public const string Staff = "LibraryStaff";
 
-    /// <summary>For [Authorize(Roles = LibraryRoles.Access)] - Head and Staff.</summary>
-    public const string Access = Head + "," + Staff;
+    /// <summary>Head, staff, and central Admin (central Admin is additionally permission-gated).</summary>
+    public const string Access = Head + "," + Staff + ",Admin";
 
-    /// <summary>For [Authorize(Roles = LibraryRoles.HeadOnly)] - Head only.</summary>
-    public const string HeadOnly = Head;
+    /// <summary>Head-only for module staff; central Admin is additionally permission-gated.</summary>
+    public const string HeadOnly = Head + ",Admin";
 
     public static bool IsLibraryRole(string? role) =>
         string.Equals(role, Head, StringComparison.Ordinal) ||

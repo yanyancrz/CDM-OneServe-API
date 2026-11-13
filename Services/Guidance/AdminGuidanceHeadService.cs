@@ -84,8 +84,10 @@ public class AdminGuidanceHeadService
                 ["canManageCounselors"] = true,
                 ["canViewStudents"] = true,
                 ["canViewReports"] = true,
-                ["canViewNarrativeReports"] = true,
-                ["canExportNarrativeReports"] = true,
+                // Platform administrators see narrative counts in aggregate,
+                // but may not open or export counseling report contents.
+                ["canViewNarrativeReports"] = GuidanceRoles.IsHead(user.Role),
+                ["canExportNarrativeReports"] = GuidanceRoles.IsHead(user.Role),
                 // Private counseling notes stay with the authoring counselor.
                 ["canViewPrivateNotes"] = false,
                 ["canManageSettings"] = true
@@ -160,7 +162,7 @@ public class AdminGuidanceHeadService
     // =====================================================
     // DASHBOARD  (GET /api/admin/guidance/dashboard/overview)
     // =====================================================
-    public async Task<GuidanceHeadOverviewDto> GetOverviewAsync(CancellationToken ct)
+    public async Task<GuidanceHeadOverviewDto> GetOverviewAsync(CancellationToken ct, bool includeRecentActivity = true)
     {
         var counselors = await _context.Users.AsNoTracking()
             .Where(u => u.Role == GuidanceRoles.Counselor && u.AccountStatus != "Deleted")
@@ -244,7 +246,10 @@ public class AdminGuidanceHeadService
             }
         };
 
-        overview.RecentActivity = await BuildRecentActivityAsync(ct);
+        // Admin overview contains aggregate counters only. The module head's
+        // own console keeps its existing activity feed.
+        if (includeRecentActivity)
+            overview.RecentActivity = await BuildRecentActivityAsync(ct);
 
         return overview;
     }

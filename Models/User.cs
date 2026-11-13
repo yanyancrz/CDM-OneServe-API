@@ -63,4 +63,19 @@ public class User
     // Set when a book is returned late: the patron cannot borrow again until
     // this date (the end of the semester in progress). Null means no ban.
     public DateTime? BorrowBanUntil { get; set; }
+
+    // =========================================================
+    // SIGN-IN PROTECTION (super admin security center)
+    //
+    // Additive and nullable. FailedLoginCount is incremented by the login
+    // route and cleared on success. LockoutUntil is only enforced when the
+    // `security.lockout.enabled` system setting is true, so existing
+    // accounts behave exactly as before until an admin opts in.
+    // =========================================================
+
+    public int FailedLoginCount { get; set; }
+
+    public DateTime? LastFailedLoginAt { get; set; }
+
+    public DateTime? LockoutUntil { get; set; }
 }

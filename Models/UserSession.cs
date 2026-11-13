@@ -71,4 +71,10 @@ public class UserSession
     /// instead of staying "Active" forever.
     /// </summary>
     public DateTime? ExpiresAt { get; set; }
+
+    // Deliberately NO navigation property to User. The table has never had an
+    // EF relationship (the foreign key in the original SQL script is named
+    // FK_UserSession_User), and adding one now would make EF try to create a
+    // second FK and an index on a live table. The Security Center joins to
+    // Users explicitly instead, exactly like the auth path reads only scalars.
 }

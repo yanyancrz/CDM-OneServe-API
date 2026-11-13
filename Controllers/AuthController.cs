@@ -6,7 +6,9 @@ using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs;
 using CDM_OneServe_API.Models;
+using CDM_OneServe_API.Models.Platform;
 using CDM_OneServe_API.Services;
+using CDM_OneServe_API.Services.Admin.Platform;
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,16 +26,32 @@ public class AuthController : ControllerBase
     private readonly IWebHostEnvironment _environment;
     private readonly IConfiguration _configuration;
 
+    // Central admin platform: sign-in telemetry, audit trail and the
+    // optional lockout policy. None of these may block a valid login -
+    // every call below is best-effort.
+    private readonly SecurityEventService _security;
+    private readonly AdminAuditService _audit;
+    private readonly SystemSettingsService _settings;
+    private readonly PermissionService _permissions;
+
     public AuthController(
         AppDbContext context,
         EmailService emailService,
         IWebHostEnvironment environment,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        SecurityEventService security,
+        AdminAuditService audit,
+        SystemSettingsService settings,
+        PermissionService permissions)
     {
         _context = context;
         _emailService = emailService;
         _environment = environment;
         _configuration = configuration;
+        _security = security;
+        _audit = audit;
+        _settings = settings;
+        _permissions = permissions;
     }
 
     [HttpGet]
@@ -150,7 +168,11 @@ public class AuthController : ControllerBase
         return int.TryParse(value, out var id) ? id : null;
     }
 
-    private void LogAdmin(string action)
+    private void LogAdmin(
+        string action,
+        string? previousValue = null,
+        string? newValue = null,
+        string? reason = null)
     {
         var adminId = GetCurrentUserId();
 
@@ -161,7 +183,24 @@ public class AuthController : ControllerBase
         {
             UserId = adminId.Value,
             Action = action,
-            Timestamp = DateTime.Now
+            Timestamp = DateTime.Now,
+
+            // Central audit fields: these legacy user-management rows now
+            // appear in the admin audit page with a real category and actor.
+            Module = "Users",
+            Category = "User Management",
+            ActorName = User.FindFirstValue(ClaimTypes.Name) ?? "Administrator",
+            ActorRole = User.FindFirstValue(ClaimTypes.Role),
+            EntityType = "User",
+            PreviousValue = previousValue,
+            NewValue = newValue,
+            Reason = reason,
+            IpAddress = Request.Headers["X-Forwarded-For"].ToString() is { Length: > 0 } fwd
+                ? fwd.Split(',')[0].Trim()
+                : HttpContext.Connection.RemoteIpAddress?.ToString(),
+            SessionKey = Request.Headers["X-Session-Key"].ToString() is { Length: > 0 } key
+                ? key
+                : null
         });
     }
 
@@ -506,6 +545,15 @@ public class AuthController : ControllerBase
 
         if (user == null)
         {
+            // Unknown address: recorded for the Security Center, with the
+            // address only - there is no account to attach it to.
+            await _security.RecordFromRequestAsync(
+                HttpContext,
+                SecurityEventTypes.LoginFailed,
+                SecuritySeverities.Warning,
+                email: email,
+                details: "Sign-in attempted for an email with no account.");
+
             return BadRequest(new { message = "Invalid Email or Password" });
         }
 
@@ -552,6 +600,29 @@ public class AuthController : ControllerBase
         // PASSWORD
         // =====================================================
 
+        var lockoutEnabled =
+            await _settings.GetBoolAsync("security.lockout.enabled");
+
+        if (lockoutEnabled &&
+            user.LockoutUntil is { } lockoutUntil &&
+            lockoutUntil > DateTime.UtcNow)
+        {
+            await _security.RecordFromRequestAsync(
+                HttpContext,
+                SecurityEventTypes.LoginBlocked,
+                SecuritySeverities.Warning,
+                user.Id,
+                user.Email,
+                user.IdNumber,
+                "Sign-in blocked while the account is locked.");
+
+            return BadRequest(new
+            {
+                message =
+                    "Too many failed sign-in attempts. Please try again later or reset your password."
+            });
+        }
+
         bool validPassword = BCrypt.Net.BCrypt.Verify(
             request.Password,
             user.PasswordHash
@@ -559,7 +630,25 @@ public class AuthController : ControllerBase
 
         if (!validPassword)
         {
+            await RecordFailedLoginAsync(user, lockoutEnabled);
+
             return BadRequest(new { message = "Invalid Email or Password" });
+        }
+
+        // A successful sign-in clears the failure counter.
+        if (user.FailedLoginCount != 0 || user.LockoutUntil != null)
+        {
+            user.FailedLoginCount = 0;
+            user.LockoutUntil = null;
+
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch
+            {
+                // Telemetry only; never block the login.
+            }
         }
 
         // =====================================================
@@ -569,6 +658,55 @@ public class AuthController : ControllerBase
         return await BuildLoginResultAsync(
             user,
             "Signed in to CDM OneServe.");
+    }
+
+    // =========================================================
+    // FAILED SIGN-IN (security telemetry + optional lockout)
+    // =========================================================
+
+    /// <summary>
+    /// Counts a wrong password, locks the account only when the
+    /// `security.lockout.enabled` setting is on, and records the event.
+    /// Never throws: a telemetry failure must not change the response.
+    /// </summary>
+    private async Task RecordFailedLoginAsync(User user, bool lockoutEnabled)
+    {
+        var locked = false;
+        var maxAttempts = 5;
+        var lockMinutes = 15;
+
+        try
+        {
+            user.FailedLoginCount += 1;
+            user.LastFailedLoginAt = DateTime.UtcNow;
+
+            maxAttempts = _settings.GetInt("security.lockout.maxAttempts", 5);
+            lockMinutes = _settings.GetInt("security.lockout.minutes", 15);
+
+            if (lockoutEnabled && user.FailedLoginCount >= maxAttempts)
+            {
+                user.LockoutUntil = DateTime.UtcNow.AddMinutes(lockMinutes);
+                user.FailedLoginCount = 0;
+                locked = true;
+            }
+
+            await _context.SaveChangesAsync();
+        }
+        catch
+        {
+            // Never block the response because the counter could not be saved.
+        }
+
+        await _security.RecordFromRequestAsync(
+            HttpContext,
+            locked ? SecurityEventTypes.LockedOut : SecurityEventTypes.LoginFailed,
+            locked ? SecuritySeverities.Critical : SecuritySeverities.Warning,
+            user.Id,
+            user.Email,
+            user.IdNumber,
+            locked
+                ? $"Account locked for {lockMinutes} minutes after {maxAttempts} failed attempts."
+                : "Incorrect password.");
     }
 
     // =========================================================
@@ -666,6 +804,40 @@ public class AuthController : ControllerBase
             });
 
             await _context.SaveChangesAsync();
+        }
+        catch
+        {
+            // ignored on purpose
+        }
+
+        // Security telemetry: one success event, plus a new-device flag when
+        // the setting is on. Both are best-effort and never block the login.
+        try
+        {
+            var agent = Request.Headers.UserAgent.ToString();
+            var forwarded = Request.Headers["X-Forwarded-For"].ToString();
+            var ip = !string.IsNullOrWhiteSpace(forwarded)
+                ? forwarded.Split(',')[0].Trim()
+                : HttpContext.Connection.RemoteIpAddress?.ToString();
+
+            await _security.RecordFromRequestAsync(
+                HttpContext,
+                SecurityEventTypes.LoginSucceeded,
+                SecuritySeverities.Info,
+                user.Id,
+                user.Email,
+                user.IdNumber,
+                activityDescription);
+
+            if (await _settings.GetBoolAsync("security.alertOnNewDevice"))
+            {
+                await _security.FlagNewDeviceAsync(
+                    user.Id,
+                    user.Email,
+                    DeviceLabel.FromUserAgent(agent),
+                    HttpContext,
+                    ip);
+            }
         }
         catch
         {
@@ -867,6 +1039,15 @@ public class AuthController : ControllerBase
             }
         });
 
+        await _security.RecordFromRequestAsync(
+            HttpContext,
+            SecurityEventTypes.PasswordResetRequested,
+            SecuritySeverities.Info,
+            user.Id,
+            user.Email,
+            user.IdNumber,
+            "Password reset OTP requested.");
+
         return Ok(new { message = "OTP Sent" });
     }
 
@@ -922,6 +1103,15 @@ public class AuthController : ControllerBase
 
         await _context.SaveChangesAsync();
 
+        await _security.RecordFromRequestAsync(
+            HttpContext,
+            SecurityEventTypes.PasswordResetCompleted,
+            SecuritySeverities.Warning,
+            user.Id,
+            user.Email,
+            user.IdNumber,
+            "Password reset with a valid OTP. All older tokens were revoked.");
+
         return Ok(new { message = "Password Updated Successfully" });
     }
 
@@ -938,6 +1128,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> AddMember(
         [FromBody] AddMemberRequest request)
     {
+        if (!await _permissions.CanAsync(User, PermissionCatalog.UsersManage, PermissionLevels.Manage, HttpContext.RequestAborted)) return Forbid();
         // ---------------- VALIDATE ROLE ----------------
 
         var role = request.Role?.Trim();
@@ -1132,6 +1323,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> AddModuleHead(
         [FromBody] AddHeadRequest request)
     {
+        if (!await _permissions.CanAsync(User, PermissionCatalog.UsersManage, PermissionLevels.Manage, HttpContext.RequestAborted)) return Forbid();
         // ---------------- REQUIRED FIELDS ----------------
 
         if (string.IsNullOrWhiteSpace(request.FullName))
@@ -1295,7 +1487,9 @@ public class AuthController : ControllerBase
     [HttpGet("users")]
     public async Task<IActionResult> GetUsers()
     {
+        if (!await _permissions.CanAsync(User, PermissionCatalog.UsersManage, PermissionLevels.View, HttpContext.RequestAborted)) return Forbid();
         var users = await _context.Users
+            .AsNoTracking()
             .Select(x => new
             {
                 x.Id,
@@ -1311,7 +1505,10 @@ public class AuthController : ControllerBase
 
                 Status = x.AccountStatus,
 
-                LastActive = x.CreatedAt
+                RegistrationDate = x.CreatedAt,
+                LastActive = _context.UserActivities
+                    .Where(a => a.UserId == x.Id && a.Action == UserActivityActions.Login)
+                    .Max(a => (DateTime?)a.CreatedAt)
             })
             .ToListAsync();
 
@@ -1334,6 +1531,7 @@ public class AuthController : ControllerBase
         int id,
         [FromBody] UpdateUserRequest request)
     {
+        if (!await _permissions.CanAsync(User, PermissionCatalog.UsersManage, PermissionLevels.Manage, HttpContext.RequestAborted)) return Forbid();
         var user = await _context.Users
             .FirstOrDefaultAsync(x => x.Id == id);
 
@@ -1509,9 +1707,24 @@ public class AuthController : ControllerBase
         LogAdmin(
             oldRole != user.Role
                 ? $"Changed role of {user.FullName} from {oldRole} to {user.Role}"
-                : $"Updated account details of {user.FullName}");
+                : $"Updated account details of {user.FullName}",
+            previousValue: oldRole != user.Role ? oldRole : null,
+            newValue: oldRole != user.Role ? user.Role : null,
+            reason: request.Reason);
 
         await _context.SaveChangesAsync();
+
+        if (oldRole != user.Role)
+        {
+            await _security.RecordFromRequestAsync(
+                HttpContext,
+                SecurityEventTypes.RoleChanged,
+                SecuritySeverities.Warning,
+                user.Id,
+                user.Email,
+                user.IdNumber,
+                $"Role changed from {oldRole} to {user.Role}.");
+        }
 
         return Ok(new
         {
@@ -1548,6 +1761,7 @@ public class AuthController : ControllerBase
         int id,
         [FromBody] UpdateUserStatusRequest request)
     {
+        if (!await _permissions.CanAsync(User, PermissionCatalog.UsersManage, PermissionLevels.Manage, HttpContext.RequestAborted)) return Forbid();
         var user = await _context.Users
             .FirstOrDefaultAsync(x => x.Id == id);
 
@@ -1579,9 +1793,22 @@ public class AuthController : ControllerBase
 
         user.AccountStatus = status;
 
-        LogAdmin($"Changed status of {user.FullName} from {oldStatus} to {status}");
+        LogAdmin(
+            $"Changed status of {user.FullName} from {oldStatus} to {status}",
+            previousValue: oldStatus,
+            newValue: status,
+            reason: request.Reason);
 
         await _context.SaveChangesAsync();
+
+        await _security.RecordFromRequestAsync(
+            HttpContext,
+            SecurityEventTypes.AccountStatusChanged,
+            status == "Suspended" ? SecuritySeverities.Warning : SecuritySeverities.Info,
+            user.Id,
+            user.Email,
+            user.IdNumber,
+            $"Account status changed from {oldStatus} to {status}.");
 
         return Ok(new
         {
@@ -1644,6 +1871,7 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> DeleteUser(
         int id)
     {
+        if (!await _permissions.CanAsync(User, PermissionCatalog.UsersManage, PermissionLevels.Manage, HttpContext.RequestAborted)) return Forbid();
         var user = await _context.Users
             .FirstOrDefaultAsync(x => x.Id == id);
 
@@ -1744,9 +1972,18 @@ public class UpdateUserRequest
     public string? Course { get; set; }
 
     public string? YearLevel { get; set; }
+
+    /// <summary>
+    /// Optional reason for a role/module change. Written to the central
+    /// audit log; never required for an ordinary profile correction.
+    /// </summary>
+    public string? Reason { get; set; }
 }
 
 public class UpdateUserStatusRequest
 {
     public string? Status { get; set; }
+
+    /// <summary>Optional reason, recorded with the status change.</summary>
+    public string? Reason { get; set; }
 }

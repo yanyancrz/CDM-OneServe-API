@@ -19,6 +19,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using CDM_OneServe_API.Interfaces.Admin.Library;
 using CDM_OneServe_API.Services.Guidance;
+using CDM_OneServe_API.Services.Admin.Platform;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,7 +28,15 @@ var builder = WebApplication.CreateBuilder(args);
 // ADD SERVICES TO THE CONTAINER
 // =====================================================
 
-builder.Services.AddControllers();
+builder.Services.AddScoped<CDM_OneServe_API.Authorization.CentralLibraryPermissionFilter>();
+builder.Services.AddScoped<CDM_OneServe_API.Authorization.CentralGuidancePermissionFilter>();
+builder.Services.AddScoped<CDM_OneServe_API.Authorization.CentralLostFoundPermissionFilter>();
+builder.Services.AddControllers(options =>
+{
+    options.Filters.AddService<CDM_OneServe_API.Authorization.CentralLibraryPermissionFilter>();
+    options.Filters.AddService<CDM_OneServe_API.Authorization.CentralGuidancePermissionFilter>();
+    options.Filters.AddService<CDM_OneServe_API.Authorization.CentralLostFoundPermissionFilter>();
+});
 
 // Needed by LibraryPolicyService to read the signed-in patron's own ban.
 builder.Services.AddHttpContextAccessor();
@@ -181,6 +190,24 @@ builder.Services.AddHostedService<PushMaintenanceHostedService>();
 builder.Services.AddScoped<AdminProfileService>();
 builder.Services.AddScoped<AdminActivityService>();
 builder.Services.AddScoped<AdminNotificationService>();
+
+// =====================================================
+// ADMIN PLATFORM (central admin / super admin)
+//
+// Permission matrix, central audit reader, security events, system
+// settings, real health probes, backup request workflow and the
+// read-only service summaries. Nothing here replaces a module console.
+// =====================================================
+
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<PermissionService>();
+builder.Services.AddScoped<AdminAuditService>();
+builder.Services.AddScoped<SecurityEventService>();
+builder.Services.AddScoped<SystemSettingsService>();
+builder.Services.AddScoped<SystemHealthService>();
+builder.Services.AddScoped<BackupService>();
+builder.Services.AddScoped<ClinicIntegrationLogger>();
+builder.Services.AddScoped<AdminServiceSummaryService>();
 
 
 // =====================================================
@@ -426,6 +453,54 @@ app.UseStaticFiles();
 
 // Authentication MUST come before Authorization.
 app.UseAuthentication();
+
+// =====================================================
+// MAINTENANCE MODE
+//
+// Reads the `platform.maintenanceMode` setting (cached 30 s). Student and
+// module APIs answer 503 with the configured message; the admin portal,
+// sign-in and the public push key stay reachable so an admin can always
+// turn it back off.
+// =====================================================
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value ?? string.Empty;
+
+    var isApi = path.StartsWith("/api", StringComparison.OrdinalIgnoreCase);
+
+    var isExempt =
+        path.StartsWith("/api/admin", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/api/push/vapid-public-key", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/hubs", StringComparison.OrdinalIgnoreCase);
+
+    if (!isApi || isExempt || HttpMethods.IsOptions(context.Request.Method))
+    {
+        await next();
+        return;
+    }
+
+    var settings = context.RequestServices
+        .GetRequiredService<SystemSettingsService>();
+
+    if (!await settings.GetBoolAsync("platform.maintenanceMode"))
+    {
+        await next();
+        return;
+    }
+
+    var message = await settings.GetAsync("platform.maintenanceMessage");
+
+    context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+    context.Response.ContentType = "application/json";
+
+    await context.Response.WriteAsJsonAsync(new
+    {
+        success = false,
+        maintenance = true,
+        message
+    });
+});
 
 // =====================================================
 // LOST & FOUND - FORCED INITIAL PASSWORD CHANGE

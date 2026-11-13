@@ -43,4 +43,34 @@ public class AdminActivityLog
 
     /// <summary>Free-text detail; never contains a password.</summary>
     public string? Details { get; set; }
+
+    // =========================================================
+    // CENTRAL AUDIT DETAILS (Admin / Super Admin portal)
+    //
+    // Additive and nullable, so every existing Library and Lost & Found
+    // writer keeps working untouched. None of these fields may ever hold
+    // a password, token, connection string, medical record or counseling
+    // narrative - see AdminAuditService, which sanitises what it writes.
+    // =========================================================
+
+    /// <summary>High-level grouping shown in the audit page's filter.</summary>
+    public string? Category { get; set; }
+
+    /// <summary>Caller IP, truncated. Never trusted for authorisation.</summary>
+    public string? IpAddress { get; set; }
+
+    /// <summary>Opaque per-login device key, for correlating one session.</summary>
+    public string? SessionKey { get; set; }
+
+    /// <summary>Why a manual change was made. Required by the admin API.</summary>
+    public string? Reason { get; set; }
+
+    /// <summary>Previous value when the action changed one (sanitised).</summary>
+    public string? PreviousValue { get; set; }
+
+    /// <summary>New value when the action changed one (sanitised).</summary>
+    public string? NewValue { get; set; }
+
+    /// <summary>Groups rows written by one request, e.g. a bulk change.</summary>
+    public string? CorrelationId { get; set; }
 }
