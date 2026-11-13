@@ -23,14 +23,39 @@ public sealed class ClinicMedicalRecordsService(
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(15));
         using var response = await clients.CreateClient().SendAsync(request, timeout.Token);
-        // Match the mobile API: an upstream error is never an empty record list.
+        var content = await response.Content.ReadAsStringAsync(timeout.Token);
+        // The CMS returns this specific 404 for students who have never
+        // visited the clinic. Other 404s and integration failures remain errors.
+        if (response.StatusCode == HttpStatusCode.NotFound && IsMissingStudent(content))
+            return JsonSerializer.SerializeToElement(Array.Empty<object>());
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException("Clinic records could not be retrieved.", null, response.StatusCode);
-        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+        using var document = JsonDocument.Parse(content);
         if (document.RootElement.ValueKind != JsonValueKind.Array
             || document.RootElement.EnumerateArray().Any(x => x.ValueKind != JsonValueKind.Object))
             throw new JsonException("Invalid Clinic records response.");
         return document.RootElement.Clone();
+    }
+
+    private static bool IsMissingStudent(string content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return false;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!(property.Name.Equals("message", StringComparison.OrdinalIgnoreCase)
+                    || property.Name.Equals("error", StringComparison.OrdinalIgnoreCase))
+                    || property.Value.ValueKind != JsonValueKind.String) continue;
+                var message = property.Value.GetString()?.Trim().TrimEnd('.');
+                if (string.Equals(message, "Student not found", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(message, "Patient not found", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        catch (JsonException) { }
+        return false;
     }
 
     public async Task<ClinicMedicalCount> GetCountAsync(CancellationToken ct)
