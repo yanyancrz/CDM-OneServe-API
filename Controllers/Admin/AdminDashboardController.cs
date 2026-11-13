@@ -11,17 +11,17 @@ using Microsoft.EntityFrameworkCore;
 namespace CDM_OneServe_API.Controllers.Admin;
 
 [Route("api/admin/dashboard")]
-[Authorize(Roles = "Admin")]
+[Authorize(Roles = "Admin,SuperAdmin")]
 public class AdminDashboardController : AdminPlatformControllerBase
 {
     private readonly AppDbContext _context;
-    private readonly ClinicIntegrationLogger _clinic;
+    private readonly ClinicMedicalRecordsService _clinic;
     private readonly SystemHealthService _health;
     private readonly SystemSettingsService _settings;
 
     public AdminDashboardController(
         AppDbContext context,
-        ClinicIntegrationLogger clinic,
+        ClinicMedicalRecordsService clinic,
         SystemHealthService health,
         SystemSettingsService settings,
         PermissionService permissions,
@@ -109,10 +109,9 @@ public class AdminDashboardController : AdminPlatformControllerBase
             guidanceUserIds.UnionWith(await _context.GuidanceCounselingRecords.Select(x => x.StudentId).Distinct().ToListAsync(ct));
             guidanceUserIds.UnionWith(await _context.GuidanceChatConversations.Select(x => x.StudentId).Distinct().ToListAsync(ct));
 
-            // This activity is recorded only after a non-empty medical-record response.
-            var clinicUserIds = await _context.UserActivities.AsNoTracking()
-                .Where(x => x.Action == UserActivityActions.ClinicRecordsViewed)
-                .Select(x => x.UserId).Distinct().ToListAsync(ct);
+            var clinicMedicalCount = await _settings.GetBoolAsync("clinic.access.enabled", ct)
+                ? await _clinic.GetCountAsync(ct)
+                : new ClinicMedicalCount(null, "Clinic access is temporarily disabled.", DateTime.UtcNow);
 
             var health = await _health.CheckAllAsync(ct);
             var clinicHealth = health.Components
@@ -122,7 +121,7 @@ public class AdminDashboardController : AdminPlatformControllerBase
             {
                 new { name = "Lost & Found", icon = "🔍", status = await ModuleStatusAsync("modules.lostfound.enabled", ct), userCount = (int?)lostFoundUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users with a report or claim", path = (string?)"/lost-found/admin" },
                 new { name = "Library", icon = "📚", status = await ModuleStatusAsync("modules.library.enabled", ct), userCount = (int?)libraryUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users who attended, borrowed, reserved or used the library", path = (string?)"/admin/library" },
-                new { name = "Clinic", icon = "🏥", status = clinicHealth, userCount = (int?)clinicUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users with confirmed medical records in OneServe", path = (string?)null },
+                new { name = "Clinic", icon = "🏥", status = clinicHealth, userCount = clinicMedicalCount.Count, activityCount = (int?)null, usageNote = clinicMedicalCount.Note, path = (string?)null },
                 new { name = "Guidance", icon = "💬", status = await ModuleStatusAsync("modules.guidance.enabled", ct), userCount = (int?)guidanceUserIds.Count(userIdSet.Contains), activityCount = (int?)null, usageNote = "users with an appointment, session or chat", path = (string?)"/admin/guidance" }
             };
 

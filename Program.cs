@@ -207,6 +207,7 @@ builder.Services.AddScoped<SystemSettingsService>();
 builder.Services.AddScoped<SystemHealthService>();
 builder.Services.AddScoped<BackupService>();
 builder.Services.AddScoped<ClinicIntegrationLogger>();
+builder.Services.AddScoped<ClinicMedicalRecordsService>();
 builder.Services.AddScoped<AdminServiceSummaryService>();
 
 

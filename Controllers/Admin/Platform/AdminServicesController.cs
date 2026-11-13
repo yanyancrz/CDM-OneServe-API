@@ -172,7 +172,8 @@ public class AdminServicesController : AdminPlatformControllerBase
             lastCheckedAt = connection.CheckedAt,
             // Explicit, so no client can assume this page carries health data.
             medicalRecordsExposed = false,
-            note = "OneServe manages the Clinic integration only. Medical records, vital signs, dental records and referrals stay in the Clinic CMS.",
+            canViewMedicalRecords = auth.Identity!.IsSuperAdmin,
+            note = "Medical records are available to the super administrator in the Medical records tab. Records are retrieved from the Clinic CMS.",
             summary
         });
     }
