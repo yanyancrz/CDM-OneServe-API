@@ -1,4 +1,5 @@
 using CDM_OneServe_API.Data;
+using CDM_OneServe_API.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -80,9 +81,19 @@ public class AdminDashboardController : ControllerBase
             guidanceUserIds.UnionWith(await _context.GuidanceChatConversations
                 .Select(x => x.StudentId).Distinct().ToListAsync());
 
+            // Clinic: the clinic itself is a separate CMS database. OneServe
+            // records a marker the first time a student's clinic request
+            // returns actual medical records, so that is what we count here.
+            var clinicUserIds = await _context.UserActivities
+                .Where(a => a.Action == UserActivityActions.ClinicRecordsViewed)
+                .Select(a => a.UserId)
+                .Distinct()
+                .ToListAsync();
+
             var libraryStudents = libraryUserIds.Count(studentIdSet.Contains);
             var lostFoundStudents = lostFoundUserIds.Count(studentIdSet.Contains);
             var guidanceStudents = guidanceUserIds.Count(studentIdSet.Contains);
+            var clinicStudents = clinicUserIds.Count(studentIdSet.Contains);
 
             // -----------------------------------------
             // MODULE STATUS
@@ -110,10 +121,8 @@ public class AdminDashboardController : ControllerBase
                     name = "Clinic",
                     icon = "🏥",
                     status = "Online",
-                    // The clinic is a separate CMS database reached through an
-                    // integration API, so its usage cannot be counted here.
-                    studentCount = (int?)null,
-                    usageNote = "managed by the external clinic system"
+                    studentCount = (int?)clinicStudents,
+                    usageNote = "students with clinic medical records"
                 },
                 new
                 {

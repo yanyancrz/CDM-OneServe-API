@@ -11,6 +11,14 @@ public static class UserActivityActions
     /// MAX(CreatedAt) for this action as the account's "Last login".
     /// </summary>
     public const string Login = "Logged in";
+
+    /// <summary>
+    /// Written once per student the first time the Clinic module returns at
+    /// least one medical record for them. The clinic itself lives in a
+    /// separate CMS database, so this local marker is how the admin dashboard
+    /// counts students who have actually visited the clinic.
+    /// </summary>
+    public const string ClinicRecordsViewed = "Viewed clinic records";
 }
 
 public class UserActivity

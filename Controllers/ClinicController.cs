@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
 using System.Security.Claims;
+using System.Text.Json;
 using CDM_OneServe_API.Data;
+using CDM_OneServe_API.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -107,6 +109,27 @@ public class ClinicController : ControllerBase
             var content = await response.Content.ReadAsStringAsync(
                 cancellationToken);
 
+            // The dashboard has no direct access to the Clinic CMS, so remember
+            // the first time a student actually has a medical record there.
+            if (response.IsSuccessStatusCode
+                && string.Equals(resource, "medical-records",
+                    StringComparison.OrdinalIgnoreCase)
+                && HasNonEmptyArray(content))
+            {
+                try
+                {
+                    await RecordClinicUsageAsync(user.Id, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // Never fail the student's request because logging failed.
+                    _logger.LogWarning(
+                        ex,
+                        "Could not record clinic usage for user {UserId}",
+                        user.Id);
+                }
+            }
+
             return new ContentResult
             {
                 StatusCode = (int)response.StatusCode,
@@ -130,5 +153,45 @@ public class ClinicController : ControllerBase
             return StatusCode(StatusCodes.Status502BadGateway,
                 new { message = "The Clinic CMS could not be reached." });
         }
+    }
+
+    private static bool HasNonEmptyArray(string content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+
+            return document.RootElement.ValueKind == JsonValueKind.Array
+                && document.RootElement.GetArrayLength() > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private async Task RecordClinicUsageAsync(
+        int userId,
+        CancellationToken cancellationToken)
+    {
+        var alreadyRecorded = await _db.UserActivities
+            .AsNoTracking()
+            .AnyAsync(
+                a => a.UserId == userId
+                    && a.Action == UserActivityActions.ClinicRecordsViewed,
+                cancellationToken);
+
+        if (alreadyRecorded)
+            return;
+
+        _db.UserActivities.Add(new UserActivity
+        {
+            UserId = userId,
+            Action = UserActivityActions.ClinicRecordsViewed,
+            Description = "Viewed clinic medical records",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        await _db.SaveChangesAsync(cancellationToken);
     }
 }
