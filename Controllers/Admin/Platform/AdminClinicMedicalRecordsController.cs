@@ -18,7 +18,7 @@ public sealed class AdminClinicMedicalRecordsController(
     {
         var auth = await AuthorizeAsync(PermissionCatalog.ClinicView, PermissionLevels.View, ct);
         if (auth.Failure is not null) return auth.Failure;
-        if (!await ClinicMedicalRecordsAccess.CanViewAsync(db, auth.Identity!, ct))
+        if (!auth.Identity!.IsSuperAdmin)
             return StatusCode(403, new { message = "Only the super administrator can view student medical records." });
         if (!await settings.GetBoolAsync("clinic.access.enabled", ct))
             return StatusCode(403, new { message = "Clinic access is temporarily disabled." });
@@ -69,24 +69,5 @@ public sealed class AdminClinicMedicalRecordsController(
         {
             return StatusCode(502, new { message = "Medical records could not be retrieved from the Clinic CMS. Please retry." });
         }
-    }
-}
-
-// Keep the designated platform administrator's Clinic access independent of
-// whether its existing role is named Admin or SuperAdmin.
-internal static class ClinicMedicalRecordsAccess
-{
-    public static async Task<bool> CanViewAsync(
-        AppDbContext db, AdminIdentity identity, CancellationToken ct)
-    {
-        if (!identity.IsActive) return false;
-        if (identity.IsSuperAdmin) return true;
-        if (!string.Equals(identity.Role, PermissionCatalog.AdminRole, StringComparison.Ordinal))
-            return false;
-        return await db.Users.AsNoTracking().AnyAsync(
-            u => u.Id == identity.UserId
-                && u.AccountStatus == "Active"
-                && u.Role == PermissionCatalog.AdminRole
-                && u.Email.Trim().ToLower() == "cruzalhianne@gmail.com", ct);
     }
 }

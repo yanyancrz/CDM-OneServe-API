@@ -172,7 +172,7 @@ public class AdminServicesController : AdminPlatformControllerBase
             lastCheckedAt = connection.CheckedAt,
             // Explicit, so no client can assume this page carries health data.
             medicalRecordsExposed = false,
-            canViewMedicalRecords = await ClinicMedicalRecordsAccess.CanViewAsync(_db, auth.Identity!, ct),
+            canViewMedicalRecords = auth.Identity!.IsSuperAdmin,
             note = "Medical records are available to the super administrator in the Medical records tab. Records are retrieved from the Clinic CMS.",
             summary
         });
