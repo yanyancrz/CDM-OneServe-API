@@ -154,9 +154,9 @@ public class ClinicIntegrationLogger
             .AsNoTracking()
             .Where(x => x.CreatedAt >= week && !x.Success)
             .GroupBy(x => x.Resource)
-            .Select(g => new ClinicFailureGroup(g.Key, g.Count()))
-            .OrderByDescending(x => x.Count)
+            .OrderByDescending(g => g.Count())
             .Take(10)
+            .Select(g => new ClinicFailureGroup(g.Key, g.Count()))
             .ToListAsync(ct);
 
         return new ClinicSummary(

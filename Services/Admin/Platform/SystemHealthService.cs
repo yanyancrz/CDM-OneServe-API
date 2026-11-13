@@ -44,21 +44,18 @@ public class SystemHealthService
 
     public async Task<SystemHealthReport> CheckAllAsync(CancellationToken ct = default)
     {
-        var apiTask = Task.FromResult(CheckApi());
-        var databaseTask = CheckDatabaseAsync(ct);
+        // The HTTP probe can overlap database work, but database probes share
+        // one scoped DbContext and must run sequentially.
         var clinicTask = CheckClinicAsync(ct);
-        var pushTask = CheckPushAsync(ct);
-        var signalRTask = Task.FromResult(CheckSignalR());
-
-        await Task.WhenAll(databaseTask, clinicTask, pushTask);
-
+        var database = await CheckDatabaseAsync(ct);
+        var push = await CheckPushAsync(ct);
         var components = new List<ComponentHealth>
         {
-            await apiTask,
-            await databaseTask,
+            CheckApi(),
+            database,
             await clinicTask,
-            await pushTask,
-            await signalRTask
+            push,
+            CheckSignalR()
         };
 
         var worst = components
@@ -233,6 +230,12 @@ public class SystemHealthService
                 latency,
                 note,
                 DateTime.UtcNow);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new ComponentHealth(
+                "clinic_cms", "Clinic CMS", "offline", (int)stopwatch.ElapsedMilliseconds,
+                "The Clinic CMS health check timed out.", DateTime.UtcNow);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
