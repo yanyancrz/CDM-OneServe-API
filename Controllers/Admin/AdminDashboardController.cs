@@ -39,6 +39,52 @@ public class AdminDashboardController : ControllerBase
                 .Where(u => u.Role == "Faculty" && u.AccountStatus != "Deleted").CountAsync();
 
             // -----------------------------------------
+            // STUDENTS USING EACH MODULE
+            //
+            // "Using" means the student has at least one record in that
+            // module's own tables, so the number is driven by real activity
+            // and not by who merely has an account.
+            // -----------------------------------------
+            var studentIds = await _context.Users
+                .Where(u => u.Role == "Student" && u.AccountStatus != "Deleted")
+                .Select(u => u.Id)
+                .ToListAsync();
+
+            var studentIdSet = studentIds.ToHashSet();
+
+            // Library: attended, borrowed, reserved, or has a library activity.
+            var libraryUserIds = new HashSet<int>();
+            libraryUserIds.UnionWith(await _context.BorrowTransactions
+                .Select(x => x.UserId).Distinct().ToListAsync());
+            libraryUserIds.UnionWith(await _context.Reservations
+                .Select(x => x.UserId).Distinct().ToListAsync());
+            libraryUserIds.UnionWith(await _context.LibraryAttendances
+                .Select(x => x.UserId).Distinct().ToListAsync());
+            libraryUserIds.UnionWith(await _context.LibraryActivities
+                .Select(x => x.UserId).Distinct().ToListAsync());
+
+            // Lost & Found: filed a report or a claim.
+            var lostFoundUserIds = new HashSet<int>();
+            lostFoundUserIds.UnionWith(await _context.LostFoundReports
+                .Select(x => x.UserId).Distinct().ToListAsync());
+            lostFoundUserIds.UnionWith(await _context.ClaimRecords
+                .Select(x => x.ClaimedByUserId).Distinct().ToListAsync());
+
+            // Guidance: booked an appointment, had a counseling session, or
+            // opened a chat with a counselor.
+            var guidanceUserIds = new HashSet<int>();
+            guidanceUserIds.UnionWith(await _context.GuidanceAppointments
+                .Select(x => x.StudentId).Distinct().ToListAsync());
+            guidanceUserIds.UnionWith(await _context.GuidanceCounselingRecords
+                .Select(x => x.StudentId).Distinct().ToListAsync());
+            guidanceUserIds.UnionWith(await _context.GuidanceChatConversations
+                .Select(x => x.StudentId).Distinct().ToListAsync());
+
+            var libraryStudents = libraryUserIds.Count(studentIdSet.Contains);
+            var lostFoundStudents = lostFoundUserIds.Count(studentIdSet.Contains);
+            var guidanceStudents = guidanceUserIds.Count(studentIdSet.Contains);
+
+            // -----------------------------------------
             // MODULE STATUS
             // -----------------------------------------
             var modules = new[]
@@ -47,25 +93,35 @@ public class AdminDashboardController : ControllerBase
                 {
                     name = "Lost & Found",
                     icon = "🔍",
-                    status = "Online"
+                    status = "Online",
+                    studentCount = (int?)lostFoundStudents,
+                    usageNote = "students who filed a report or claim"
                 },
                 new
                 {
                     name = "Library",
                     icon = "📚",
-                    status = "Online"
+                    status = "Online",
+                    studentCount = (int?)libraryStudents,
+                    usageNote = "students who attended, borrowed or reserved"
                 },
                 new
                 {
                     name = "Clinic",
                     icon = "🏥",
-                    status = "Online"
+                    status = "Online",
+                    // The clinic is a separate CMS database reached through an
+                    // integration API, so its usage cannot be counted here.
+                    studentCount = (int?)null,
+                    usageNote = "managed by the external clinic system"
                 },
                 new
                 {
                     name = "Guidance",
                     icon = "💬",
-                    status = "Online"
+                    status = "Online",
+                    studentCount = (int?)guidanceStudents,
+                    usageNote = "students with an appointment, session or chat"
                 }
             };
 
