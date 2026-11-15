@@ -207,9 +207,66 @@ public class AuthController : ControllerBase
         });
     }
 
+    // Store document bytes and metadata in the database with the new account.
+    [HttpPost("register-with-document")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(6 * 1024 * 1024)]
+    public async Task<IActionResult> RegisterWithDocument(
+        [FromForm] RegisterRequest request,
+        [FromForm] IFormFile? supportingDocument)
+    {
+        const long maxSize = 5 * 1024 * 1024;
+        if (supportingDocument == null || supportingDocument.Length == 0)
+            return BadRequest(new { message = "Please upload an ID, registration form, or OVRF." });
+        if (supportingDocument.Length > maxSize)
+            return BadRequest(new { message = "Supporting document must be up to 5 MB." });
+
+        var extension = Path.GetExtension(supportingDocument.FileName).ToLowerInvariant();
+        var expectedType = extension switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            _ => null
+        };
+        if (expectedType == null || !string.Equals(expectedType, supportingDocument.ContentType, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Please upload a PDF, JPG, or PNG file." });
+
+        await using var input = supportingDocument.OpenReadStream();
+        var header = new byte[8];
+        var headerLength = await input.ReadAtLeastAsync(header, header.Length, throwOnEndOfStream: false);
+        var validSignature = extension switch
+        {
+            ".pdf" => headerLength >= 5 && Encoding.ASCII.GetString(header, 0, 5) == "%PDF-",
+            ".jpg" or ".jpeg" => headerLength >= 3 && header[0] == 0xff && header[1] == 0xd8 && header[2] == 0xff,
+            ".png" => headerLength == 8 && header.AsSpan().SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }),
+            _ => false
+        };
+        if (!validSignature)
+            return BadRequest(new { message = "The file contents must match a PDF, JPG, or PNG document." });
+
+        await using var content = new MemoryStream();
+        await content.WriteAsync(header.AsMemory(0, headerLength));
+        await input.CopyToAsync(content);
+        var document = new RegistrationDocument
+        {
+            FileName = Path.GetFileName(supportingDocument.FileName),
+            ContentType = expectedType,
+            Content = content.ToArray(),
+            UploadedAtUtc = DateTime.UtcNow
+        };
+        if (document.FileName.Length > 255)
+            return BadRequest(new { message = "Document filename must be at most 255 characters." });
+
+        return await RegisterCore(request, document);
+    }
+
     [HttpPost("register")]
-    public async Task<IActionResult> Register(
-        RegisterRequest request)
+    public Task<IActionResult> Register(RegisterRequest request)
+        => RegisterCore(request);
+
+    private async Task<IActionResult> RegisterCore(
+        RegisterRequest request, RegistrationDocument? document = null)
     {
         if (string.IsNullOrWhiteSpace(request.IdNumber))
             return BadRequest(new { message = "ID Number is required." });
@@ -334,6 +391,13 @@ public class AuthController : ControllerBase
         };
 
         _context.Users.Add(user);
+        if (document != null)
+        {
+            // EF inserts both rows in the same SaveChanges transaction.
+            // A document failure must never leave a registered account behind.
+            document.User = user;
+            _context.RegistrationDocuments.Add(document);
+        }
 
 
         var trackedRecord = await _context.SchoolRecords

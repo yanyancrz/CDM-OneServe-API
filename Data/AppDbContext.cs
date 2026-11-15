@@ -21,6 +21,8 @@ public class AppDbContext : DbContext
 
     public DbSet<User> Users { get; set; }
 
+    public DbSet<RegistrationDocument> RegistrationDocuments { get; set; } = null!;
+
     public DbSet<OTPVerification> OTPVerifications { get; set; }
 
     public DbSet<EmailChangeRequest> EmailChangeRequests { get; set; }
@@ -156,6 +158,18 @@ public class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<RegistrationDocument>(e =>
+        {
+            e.ToTable("registration_documents");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.FileName).HasMaxLength(255).IsRequired();
+            e.Property(x => x.ContentType).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Content).HasColumnType("mediumblob").IsRequired();
+            e.HasIndex(x => x.UserId).IsUnique();
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
 
         // =========================
