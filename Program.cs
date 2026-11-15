@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text;
 
 using CDM_OneServe_API.Data;
@@ -31,8 +31,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddScoped<CDM_OneServe_API.Authorization.CentralLibraryPermissionFilter>();
 builder.Services.AddScoped<CDM_OneServe_API.Authorization.CentralGuidancePermissionFilter>();
 builder.Services.AddScoped<CDM_OneServe_API.Authorization.CentralLostFoundPermissionFilter>();
+builder.Services.AddScoped<CDM_OneServe_API.Authorization.GuidanceAuditFilter>();
 builder.Services.AddControllers(options =>
 {
+    options.Filters.AddService<CDM_OneServe_API.Authorization.GuidanceAuditFilter>();
     options.Filters.AddService<CDM_OneServe_API.Authorization.CentralLibraryPermissionFilter>();
     options.Filters.AddService<CDM_OneServe_API.Authorization.CentralGuidancePermissionFilter>();
     options.Filters.AddService<CDM_OneServe_API.Authorization.CentralLostFoundPermissionFilter>();
