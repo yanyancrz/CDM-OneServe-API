@@ -192,7 +192,9 @@ public class AdminServiceSummaryService
 
         var recentAppointmentRecords = await _db.GuidanceAppointments.AsNoTracking()
             .OrderByDescending(x => x.UpdatedAt).ThenByDescending(x => x.Id).Take(20)
-            .Select(x => new { x.Id, x.Date, x.TimeSlot, x.Status, x.UpdatedAt }).ToListAsync(ct);
+            .Select(x => new { x.Id, x.Date, x.TimeSlot, x.Status, x.UpdatedAt,
+                StudentName = x.Student != null ? x.Student.FullName : null,
+                CounselorName = x.Counselor != null ? x.Counselor.FullName : null }).ToListAsync(ct);
         // Only report metadata; never select a student's identity, report title, narrative or private notes.
         var recentReports = await _db.GuidanceCounselingRecords.AsNoTracking()
             .OrderByDescending(x => x.UpdatedAt).ThenByDescending(x => x.Id).Take(20)
@@ -220,7 +222,7 @@ public class AdminServiceSummaryService
                 RecentRecords = new() {
                     ["appointments"] = recentAppointmentRecords.Select(x => new ServiceRecentRecord(x.Id,
                         "Appointment #" + x.Id, x.Date.ToString("yyyy-MM-dd") + " at " + x.TimeSlot,
-                        x.Status, x.UpdatedAt, null)).ToList(),
+                        x.Status, x.UpdatedAt, null) { StudentName = x.StudentName, CounselorName = x.CounselorName }).ToList(),
                     ["systems"] = recentReports
                 }
             };
@@ -327,7 +329,10 @@ public sealed record ServiceActivity(
     DateTime At,
     string? Actor);
 
-public sealed record ServiceRecentRecord(int Id, string Title, string? Detail, string Status, DateTime At, DateTime? ScheduledFor);
+public sealed record ServiceRecentRecord(int Id, string Title, string? Detail, string Status, DateTime At, DateTime? ScheduledFor) {
+    public string? StudentName { get; init; }
+    public string? CounselorName { get; init; }
+}
 
 public sealed record LibraryOversight(
     int Titles,
