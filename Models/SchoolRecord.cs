@@ -2,9 +2,9 @@ namespace CDM_OneServe_API.Models;
 
 // =========================================================
 // SCHOOL RECORD
-// The official list of ID Numbers allowed to register.
-// Registration is rejected unless the submitted ID Number
-// exists in this table. IDs live ONLY here — never in code.
+// School records maintained by administrators. Public registration
+// accepts IDs without a roster entry. The legacy IsUsed field remains
+// for existing school records and administrative workflows.
 // =========================================================
 public class SchoolRecord
 {

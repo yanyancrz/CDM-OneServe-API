@@ -389,7 +389,7 @@ public class EmailService
     // learns it so they can log in and complete Setup Profile.
     // =========================================================
 
-    public Task SendCredentialsAsync(
+    public virtual Task SendCredentialsAsync(
         string recipientEmail,
         string idNumber,
         string password)

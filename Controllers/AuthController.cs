@@ -288,37 +288,11 @@ public class AuthController : ControllerBase
         // =====================================================
         // NEW FLOW: ID Number + Email only (no names,
         // no password from the user).
-        // The ID must exist in the official School Records —
-        // IDs live ONLY in the database, never in code.
+        // Any non-empty ID may register; no School Records roster is required.
+        // Existing account ID/email checks below still prevent duplicates.
         // =====================================================
 
         var normalizedId = NormalizeIdNumber(request.IdNumber);
-
-        var schoolRecords = await _context.SchoolRecords
-            .AsNoTracking()
-            .ToListAsync();
-
-        var schoolRecord = schoolRecords.FirstOrDefault(x =>
-            NormalizeIdNumber(x.IdNumber) == normalizedId);
-
-        if (schoolRecord == null)
-        {
-            return BadRequest(new
-            {
-                message = "This ID Number is not in the official school records. Please contact the administrator."
-            });
-        }
-
-        if (!string.Equals(
-                schoolRecord.Role?.Trim(),
-                role,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return BadRequest(new
-            {
-                message = $"This ID Number is registered as a {schoolRecord.Role} record. Please select {schoolRecord.Role} as your account type."
-            });
-        }
 
         var users = await _context.Users
             .AsNoTracking()
@@ -370,8 +344,8 @@ public class AuthController : ControllerBase
 
         // =====================================================
         // CREATE THE ACCOUNT IMMEDIATELY.
-        // The School Record IS the verification, so the account
-        // is Active at once — no OTP, no admin review.
+        // Keep the existing immediate account activation and emailed
+        // generated credentials — no OTP or admin review is added.
         // Names are completed later in Setup Profile.
         // =====================================================
 
@@ -400,14 +374,7 @@ public class AuthController : ControllerBase
         }
 
 
-        var trackedRecord = await _context.SchoolRecords
-            .FirstOrDefaultAsync(x => x.IdNumber == schoolRecord.IdNumber);
-
-        if (trackedRecord != null)
-        {
-            trackedRecord.IsUsed = true;
-        }
-            await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync();
 
         // Send credentials email in the background so the HTTP response
         // is not blocked by the SMTP transaction.
