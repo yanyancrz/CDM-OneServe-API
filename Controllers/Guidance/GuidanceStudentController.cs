@@ -24,12 +24,10 @@ namespace CDM_OneServe_API.Controllers.Guidance;
 public class GuidanceStudentController : ControllerBase
 {
     private readonly GuidanceStudentService _service;
-    private readonly GuidanceChatService _chat;
 
-    public GuidanceStudentController(GuidanceStudentService service, GuidanceChatService chat)
+    public GuidanceStudentController(GuidanceStudentService service)
     {
         _service = service;
-        _chat = chat;
     }
 
     private bool TryGetUserId(out int userId) =>
@@ -82,54 +80,6 @@ public class GuidanceStudentController : ControllerBase
             return Unauthorized(new { message = "Invalid session. Please log in again." });
 
         return Ok(new { appointments = await _service.GetMyAppointmentsAsync(studentId, ct) });
-    }
-
-    [HttpGet("conversations")]
-    public async Task<IActionResult> Conversations(CancellationToken ct)
-    {
-        if (!TryGetUserId(out var studentId))
-            return Unauthorized(new { message = "Invalid session. Please log in again." });
-
-        return Ok(new { conversations = await _chat.GetConversationsAsync(studentId, isCounselor: false, ct) });
-    }
-
-    [HttpPost("conversations")]
-    public async Task<IActionResult> StartConversation([FromBody] StartConversationRequest request, CancellationToken ct)
-    {
-        if (!TryGetUserId(out var studentId))
-            return Unauthorized(new { message = "Invalid session. Please log in again." });
-
-        return Map(await _chat.StartConversationAsync(studentId, request.CounselorId, ct));
-    }
-
-    [HttpGet("conversations/{conversationId:int}/messages")]
-    public async Task<IActionResult> Messages(int conversationId, [FromQuery] int? take, CancellationToken ct)
-    {
-        if (!TryGetUserId(out var studentId))
-            return Unauthorized(new { message = "Invalid session. Please log in again." });
-
-        var messages = await _chat.GetMessagesAsync(studentId, isCounselor: false, conversationId, take, ct);
-        return messages == null ? NotFound(new { message = "Conversation not found." }) : Ok(new { messages });
-    }
-
-    [HttpPost("conversations/{conversationId:int}/messages")]
-    public async Task<IActionResult> Send(int conversationId, [FromBody] SendMessageRequest request, CancellationToken ct)
-    {
-        if (!TryGetUserId(out var studentId))
-            return Unauthorized(new { message = "Invalid session. Please log in again." });
-
-        return Map(await _chat.SendMessageAsync(studentId, isCounselor: false, conversationId, request, ct));
-    }
-
-    [HttpPost("conversations/{conversationId:int}/read")]
-    public async Task<IActionResult> MarkRead(int conversationId, CancellationToken ct)
-    {
-        if (!TryGetUserId(out var studentId))
-            return Unauthorized(new { message = "Invalid session. Please log in again." });
-
-        return await _chat.MarkReadAsync(studentId, isCounselor: false, conversationId, ct)
-            ? Ok(new { message = "Marked as read." })
-            : NotFound(new { message = "Conversation not found." });
     }
 
     [HttpGet("follow-ups")]

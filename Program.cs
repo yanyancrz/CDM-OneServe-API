@@ -129,10 +129,10 @@ builder.Services.AddHostedService<ReservationExpiryBackgroundService>();
 // =====================================================
 
 builder.Services.AddScoped<GuidanceScheduleService>();
+builder.Services.AddScoped<GuidanceRescheduleService>();
 builder.Services.AddScoped<GuidanceStudentService>();
 builder.Services.AddScoped<GuidanceCounselorService>();
 builder.Services.AddScoped<GuidanceNotificationService>();
-builder.Services.AddScoped<GuidanceChatService>();
 
 // PH public holidays (Nager.Date) - shared by the student booking screen and
 // the counselor Manage Availability calendar, and enforced server-side.

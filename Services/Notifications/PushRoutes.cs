@@ -20,9 +20,7 @@ public static class PushRoutes
     // ---- Guidance ----
     public const string GuidanceStudentHome = "/guidance";
     public const string GuidanceStudentAppointments = "/guidance/appointments";
-    public const string GuidanceChat = "/guidance/chat";
     public const string GuidanceCounselorAppointments = "/guidance/counselor/appointments";
-    public const string GuidanceCounselorChat = "/guidance/counselor/chat";
 
     // ---- Lost & Found ----
     public const string LostFoundHome = "/lost-found";
@@ -68,6 +66,8 @@ public static class PushRoutes
             return guidanceEvent switch
             {
                 "guidance:guidance_appointment_request" => GuidanceCounselorAppointments,
+                "guidance:guidance_reschedule_counselor_review" => GuidanceCounselorAppointments,
+                "guidance:guidance_reschedule_counselor_confirmed" => GuidanceCounselorAppointments,
                 "guidance:guidance_followup_response" => GuidanceCounselorAppointments,
 
                 // Ambiguous recipient: let the GuidanceGate sort it out.

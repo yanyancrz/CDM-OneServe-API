@@ -58,7 +58,7 @@ public class GuidanceScheduleService
         return slots;
     }
 
-    public async Task<GuidanceDaySlots> GetDaySlotsAsync(int counselorId, DateOnly date, CancellationToken ct = default)
+    public async Task<GuidanceDaySlots> GetDaySlotsAsync(int counselorId, DateOnly date, CancellationToken ct = default, int? excludeAppointmentId = null)
     {
         // A public holiday closes EVERY counselor's date - checked before the
         // weekly blocks so the whole school is treated the same way, and the
@@ -82,7 +82,7 @@ public class GuidanceScheduleService
 
         var blocks = await _context.GuidanceAvailabilities
             .AsNoTracking()
-            .Where(a => a.CounselorId == counselorId && a.DayOfWeek == dow)
+            .Where(a => a.CounselorId == counselorId && a.DayOfWeek == dow && a.IsActive)
             .OrderBy(a => a.StartTime)
             .ToListAsync(ct);
 
@@ -100,6 +100,7 @@ public class GuidanceScheduleService
         var booked = await _context.GuidanceAppointments
             .AsNoTracking()
             .Where(a => a.CounselorId == counselorId
+                        && (excludeAppointmentId == null || a.Id != excludeAppointmentId)
                         && a.Date == date
                         && GuidanceScheduleService.OccupyingStatuses.Contains(a.Status))
             .Select(a => a.TimeSlot)

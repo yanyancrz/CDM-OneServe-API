@@ -109,6 +109,7 @@ public class AppDbContext : DbContext
     public DbSet<GuidanceAvailability> GuidanceAvailabilities { get; set; } = null!;
     public DbSet<GuidanceDayOff> GuidanceDayOffs { get; set; } = null!;
     public DbSet<GuidanceAppointment> GuidanceAppointments { get; set; } = null!;
+    public DbSet<GuidanceRescheduleProposal> GuidanceRescheduleProposals { get; set; } = null!;
     public DbSet<GuidanceAppointmentReschedule> GuidanceAppointmentReschedules { get; set; } = null!;
     public DbSet<GuidanceCounselingRecord> GuidanceCounselingRecords { get; set; } = null!;
     public DbSet<GuidanceNarrativeAttachment> GuidanceNarrativeAttachments { get; set; } = null!;
@@ -286,6 +287,17 @@ public class AppDbContext : DbContext
             e.ToTable("guidance_appointments");
             e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Counselor).WithMany().HasForeignKey(x => x.CounselorId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<GuidanceRescheduleProposal>(e =>
+        {
+            e.ToTable("guidance_reschedule_proposals");
+            e.Property(p => p.ProposedTimeSlot).HasMaxLength(20);
+            e.Property(p => p.OriginalTimeSlot).HasMaxLength(20);
+            e.Property(p => p.Reason).HasMaxLength(500);
+            e.Property(p => p.Instructions).HasMaxLength(1000);
+            e.Property(p => p.Status).HasMaxLength(20);
+            e.HasOne(p => p.Appointment).WithMany().HasForeignKey(p => p.AppointmentId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<GuidanceAppointmentReschedule>(e =>

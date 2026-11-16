@@ -24,17 +24,17 @@ namespace CDM_OneServe_API.Controllers.Guidance;
 public class GuidanceCounselorController : ControllerBase
 {
     private readonly GuidanceCounselorService _service;
-    private readonly GuidanceChatService _chat;
     private readonly GuidanceNarrativeService _narrative;
+    private readonly GuidanceRescheduleService _reschedules;
 
     public GuidanceCounselorController(
         GuidanceCounselorService service,
-        GuidanceChatService chat,
-        GuidanceNarrativeService narrative)
+        GuidanceNarrativeService narrative,
+        GuidanceRescheduleService reschedules)
     {
         _service = service;
-        _chat = chat;
         _narrative = narrative;
+        _reschedules = reschedules;
     }
 
     private bool TryGetUserId(out int id) =>
@@ -100,7 +100,7 @@ public class GuidanceCounselorController : ControllerBase
         if (appointmentId <= 0 || string.IsNullOrWhiteSpace(date))
             return BadRequest(new { message = "appointmentId and date are required." });
 
-        var r = await _service.GetRescheduleAvailabilityAsync(id, appointmentId, date, ct);
+        var r = await _reschedules.AvailabilityAsync(id, true, appointmentId, date, ct);
         return r.Success ? Ok(r.Data) : StatusCode(r.Status, new { message = r.Message });
     }
 
@@ -109,7 +109,9 @@ public class GuidanceCounselorController : ControllerBase
         int appointmentId, [FromBody] RescheduleAppointmentRequest request, CancellationToken ct)
     {
         if (!TryGetUserId(out var id)) return Invalid();
-        return Map(await _service.RescheduleAsync(id, appointmentId, request, ct));
+        return Map(await _reschedules.ProposeAsync(id, true, appointmentId, new ProposeRescheduleRequest {
+            Date = request.Date, TimeSlot = request.TimeSlot, Reason = request.Reason, Instructions = request.Instructions
+        }, ct));
     }
 
     [HttpGet("records")]
@@ -285,37 +287,6 @@ public class GuidanceCounselorController : ControllerBase
         if (!TryGetUserId(out var id)) return Invalid();
         var r = await _service.GetStudentCaseAsync(id, studentId, ct);
         return r.Success ? Ok(r.Data) : StatusCode(r.Status, new { message = r.Message });
-    }
-
-    [HttpGet("conversations")]
-    public async Task<IActionResult> Conversations(CancellationToken ct)
-    {
-        if (!TryGetUserId(out var id)) return Invalid();
-        return Ok(new { conversations = await _chat.GetConversationsAsync(id, isCounselor: true, ct) });
-    }
-
-    [HttpGet("conversations/{conversationId:int}/messages")]
-    public async Task<IActionResult> Messages(int conversationId, [FromQuery] int? take, CancellationToken ct)
-    {
-        if (!TryGetUserId(out var id)) return Invalid();
-        var messages = await _chat.GetMessagesAsync(id, isCounselor: true, conversationId, take, ct);
-        return messages == null ? NotFound(new { message = "Conversation not found." }) : Ok(new { messages });
-    }
-
-    [HttpPost("conversations/{conversationId:int}/messages")]
-    public async Task<IActionResult> Send(int conversationId, [FromBody] SendMessageRequest request, CancellationToken ct)
-    {
-        if (!TryGetUserId(out var id)) return Invalid();
-        return Map(await _chat.SendMessageAsync(id, isCounselor: true, conversationId, request, ct));
-    }
-
-    [HttpPost("conversations/{conversationId:int}/read")]
-    public async Task<IActionResult> MarkRead(int conversationId, CancellationToken ct)
-    {
-        if (!TryGetUserId(out var id)) return Invalid();
-        return await _chat.MarkReadAsync(id, isCounselor: true, conversationId, ct)
-            ? Ok(new { message = "Marked as read." })
-            : NotFound(new { message = "Conversation not found." });
     }
 
     [HttpGet("availability")]

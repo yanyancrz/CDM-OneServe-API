@@ -56,7 +56,8 @@ public class GuidanceReminderBackgroundService : BackgroundService
 
             // Sessions today that start within the next hour (and haven't started).
             var upcoming = await db.GuidanceAppointments.AsNoTracking()
-                .Where(a => a.Status == "Confirmed" && a.Date == today)
+                .Where(a => a.Status == "Confirmed" && a.Date == today &&
+                    !db.GuidanceRescheduleProposals.Any(p => p.AppointmentId == a.Id && p.Status == "Pending"))
                 .Select(a => new { a.Id, a.StudentId, a.TimeSlot })
                 .ToListAsync(ct);
 

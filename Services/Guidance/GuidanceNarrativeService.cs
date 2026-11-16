@@ -163,7 +163,7 @@ public class GuidanceNarrativeService
             string.IsNullOrWhiteSpace(request.Interventions))
         {
             return GuidanceResult<NarrativeReportDetailDto>.Fail(400,
-                "Write the session summary, observations or interventions before finalizing.");
+                "Write the narrative report, observations or interventions, or attach a handwritten report before finalizing.");
         }
 
         var subject = await _context.Users.AsNoTracking()
@@ -301,10 +301,11 @@ public class GuidanceNarrativeService
 
         if (string.IsNullOrWhiteSpace(record.SessionSummary) &&
             string.IsNullOrWhiteSpace(record.Observations) &&
-            string.IsNullOrWhiteSpace(record.Interventions))
+            string.IsNullOrWhiteSpace(record.Interventions) &&
+            !await _context.GuidanceNarrativeAttachments.AnyAsync(a => a.RecordId == id, ct))
         {
             return GuidanceResult<NarrativeReportDetailDto>.Fail(400,
-                "Write the session summary, observations or interventions before finalizing.");
+                "Write the narrative report, observations or interventions, or attach a handwritten report before finalizing.");
         }
 
         record.Status = "Finalized";

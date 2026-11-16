@@ -281,6 +281,10 @@ public class GuidanceCounselorService
             return GuidanceResult<object>.Fail(409, "Only a confirmed or arrived appointment can be marked as completed.");
 
         var wasConfirmed = appt.Status == "Confirmed";
+        if (status != "Cancelled" && status != "Rejected" &&
+            await _context.GuidanceRescheduleProposals.AnyAsync(p => p.AppointmentId == appointmentId && p.Status == "Pending", ct))
+            return Fail<object>(409, "A reschedule is awaiting agreement. Respond to the proposal first, or cancel the appointment.");
+
         var previousStatus = appt.Status;
 
         appt.Status = status;
@@ -376,8 +380,9 @@ public class GuidanceCounselorService
 
         // Only live sessions can auto-terminate; every other status is
         // already final (Completed/Cancelled/Rejected/Expired/NoShow).
-        var confirmed = await _context.GuidanceAppointments
-            .Where(a => a.Status == "Confirmed" && a.Date <= today)
+        var confirmed = await _context.GuidanceAppointments.AsNoTracking()
+            .Where(a => a.Status == "Confirmed" && a.Date <= today &&
+                !_context.GuidanceRescheduleProposals.Any(p => p.AppointmentId == a.Id && p.Status == "Pending"))
             .ToListAsync(ct);
 
         var stale = confirmed.Where(a =>
@@ -387,13 +392,19 @@ public class GuidanceCounselorService
 
         if (stale.Count == 0) return 0;
 
+        var terminated = new List<GuidanceAppointment>();
         foreach (var appt in stale)
         {
-            appt.Status = "NoShow";
-            appt.UpdatedAt = DateTime.UtcNow;
+            // Recheck at the update, so a just-created proposal or accepted new
+            // date cannot be overwritten by a background worker's earlier snapshot.
+            var changed = await _context.GuidanceAppointments
+                .Where(a => a.Id == appt.Id && a.Status == "Confirmed" && a.Date == appt.Date && a.TimeSlot == appt.TimeSlot &&
+                    !_context.GuidanceRescheduleProposals.Any(p => p.AppointmentId == a.Id && p.Status == "Pending"))
+                .ExecuteUpdateAsync(update => update.SetProperty(a => a.Status, "NoShow")
+                    .SetProperty(a => a.UpdatedAt, DateTime.UtcNow), ct);
+            if (changed > 0) { appt.Status = "NoShow"; terminated.Add(appt); }
         }
-
-        await _context.SaveChangesAsync(ct);
+        stale = terminated;
 
         foreach (var appt in stale)
         {
@@ -474,103 +485,6 @@ public class GuidanceCounselorService
             AvailableSlots = busy ? new List<string>() : slots.AvailableSlots,
             StudentBusy = busy
         });
-    }
-
-    public async Task<GuidanceResult<object>> RescheduleAsync(
-        int counselorId, int appointmentId, RescheduleAppointmentRequest req, CancellationToken ct)
-    {
-        if (!TryDate(req.Date, out var newDate))
-            return Fail<object>(400, "New date must be a valid date (YYYY-MM-DD).");
-        if (newDate < GuidanceClock.Today)
-            return Fail<object>(400, "Cannot reschedule to a date in the past.");
-
-        var slotMinutes = GuidanceClock.ParseSlot(req.TimeSlot);
-        if (slotMinutes == null)
-            return Fail<object>(400, "Please choose a valid time slot.");
-        if (newDate == GuidanceClock.Today && slotMinutes <= GuidanceClock.MinutesNow)
-            return Fail<object>(400, "That time has already passed today. Please choose a later time.");
-
-        var reason = req.Reason.Trim();
-        if (reason.Length < 5)
-            return Fail<object>(400, "Please give a reason (at least 5 characters).");
-        var instructions = string.IsNullOrWhiteSpace(req.Instructions) ? null : req.Instructions.Trim();
-
-        await using var tx = await _context.Database.BeginTransactionAsync(ct);
-        try
-        {
-            var appt = await _context.GuidanceAppointments
-                .FirstOrDefaultAsync(a => a.Id == appointmentId && a.CounselorId == counselorId, ct);
-            if (appt == null) return Fail<object>(404, "Appointment not found.");
-            if (!Reschedulable.Contains(appt.Status)) return Fail<object>(409, NotReschedulable(appt.Status));
-
-            if (appt.Date == newDate && appt.TimeSlot == req.TimeSlot)
-                return Fail<object>(400, "The new date and time are the same as the current appointment. Please choose a different time.");
-
-            var day = await _schedule.GetDaySlotsAsync(counselorId, newDate, ct);
-            if (day.OffDay)
-            {
-                if (day.Holiday != null)
-                    return Fail<object>(400, $"That date is a holiday ({day.Holiday}). Please choose another day.");
-                if (!string.IsNullOrWhiteSpace(day.OffReason))
-                    return Fail<object>(400, $"You are marked unavailable on that day ({day.OffReason}). Please choose another day.");
-                return Fail<object>(400, "You have no availability set for that day. Please choose a day within your schedule.");
-            }
-            if (!day.AllSlots.Contains(req.TimeSlot))
-                return Fail<object>(400, "That time is outside your availability. Please choose one of the available slots.");
-            if (!day.AvailableSlots.Contains(req.TimeSlot))
-                return Fail<object>(409, "That time slot is already booked. Choose a different time.");
-
-            var occupying = GuidanceScheduleService.OccupyingStatuses;
-            if (await _context.GuidanceAppointments.AnyAsync(a =>
-                    a.StudentId == appt.StudentId && a.Date == newDate &&
-                    occupying.Contains(a.Status) && a.Id != appt.Id, ct))
-                return Fail<object>(409, "This person already has another appointment on that date. Only one appointment per day is allowed.");
-
-            var history = new GuidanceAppointmentReschedule
-            {
-                AppointmentId = appt.Id,
-                RescheduledBy = counselorId,
-                OldDate = appt.Date,
-                OldTimeSlot = appt.TimeSlot,
-                NewDate = newDate,
-                NewTimeSlot = req.TimeSlot,
-                PreviousStatus = appt.Status,
-                Reason = reason,
-                Instructions = instructions
-            };
-            _context.GuidanceAppointmentReschedules.Add(history);
-
-            var oldDate = appt.Date;
-            var oldSlot = appt.TimeSlot;
-            var wasPending = appt.Status == "Pending";
-
-            appt.Date = newDate;
-            appt.TimeSlot = req.TimeSlot;
-            appt.Status = "Confirmed";   // rescheduling a Pending request also confirms it (original rule)
-            appt.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-
-            // After commit: notifications must never roll back or fail the reschedule.
-            await ClearRequestNotificationAsync(counselorId, appt, ct, oldDate, oldSlot);
-
-            var counselorName = await _context.Users.AsNoTracking()
-                .Where(u => u.Id == counselorId).Select(u => u.FullName).FirstOrDefaultAsync(ct) ?? "Your counselor";
-
-            await NotifyAsync(appt.StudentId, "GUIDANCE_APPOINTMENT_RESCHEDULED", "Appointment Rescheduled",
-                $"{counselorName} moved your appointment from {D(oldDate)} {oldSlot} to {D(newDate)} {req.TimeSlot}. Reason: {reason}" +
-                (wasPending ? " Your request is now confirmed." : ""), ct);
-
-            return GuidanceResult<object>.Ok(new { id = appt.Id, status = appt.Status }, "Appointment rescheduled.");
-        }
-        catch (DbUpdateException ex) when (ex.InnerException is MySqlException { Number: 1062 } my)
-        {
-            await tx.RollbackAsync(ct);
-            return my.Message.Contains("uq_ga_active_student_day", StringComparison.OrdinalIgnoreCase)
-                ? Fail<object>(409, "This person already has another appointment on that date. Only one appointment per day is allowed.")
-                : Fail<object>(409, "That time slot is already booked. Choose a different time.");
-        }
     }
 
     // ------------------------------------------------------------------

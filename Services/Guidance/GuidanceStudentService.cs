@@ -523,20 +523,13 @@ public class GuidanceStudentService
         var holdDays = (await _settings.GetAsync(ct)).AutoExpireDays;
         var cutoff = today.AddDays(-holdDays);
 
-        var stale = await _context.GuidanceAppointments
-            .Where(a => a.Status == "Pending" && a.Date < cutoff)
-            .ToListAsync(ct);
-
-        foreach (var a in stale)
-        {
-            a.Status = "Expired";
-            a.UpdatedAt = DateTime.UtcNow;
-        }
-
-        if (stale.Count > 0)
-            await _context.SaveChangesAsync(ct);
-
-        return stale.Count;
+        // An atomic conditional update cannot expire an appointment whose
+        // proposal or final schedule changed after an earlier read.
+        return await _context.GuidanceAppointments
+            .Where(a => a.Status == "Pending" && a.Date < cutoff &&
+                !_context.GuidanceRescheduleProposals.Any(p => p.AppointmentId == a.Id && p.Status == "Pending"))
+            .ExecuteUpdateAsync(update => update.SetProperty(a => a.Status, "Expired")
+                .SetProperty(a => a.UpdatedAt, DateTime.UtcNow), ct);
     }
 
     private static bool TryParseDate(string? s, out DateOnly date) =>

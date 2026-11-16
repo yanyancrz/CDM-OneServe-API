@@ -319,23 +319,6 @@ public class AdminGuidanceHeadService
             });
         }
 
-        var messages = await _context.GuidanceChatMessages.AsNoTracking()
-            .OrderByDescending(m => m.CreatedAt)
-            .Take(6)
-            .ToListAsync(ct);
-
-        foreach (var m in messages)
-        {
-            var preview = m.Body.Length > 60 ? m.Body[..60] + "…" : m.Body;
-            items.Add(new GuidanceActivityDto
-            {
-                Kind = "chat",
-                Title = "Chat message",
-                Detail = preview,
-                At = GuidanceClock.FromUtc(m.CreatedAt)
-            });
-        }
-
         return items.OrderByDescending(i => i.At).Take(8).ToList();
     }
 
