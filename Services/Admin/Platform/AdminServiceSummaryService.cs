@@ -175,8 +175,8 @@ public class AdminServiceSummaryService
                 x.TimeSlot,
                 x.Status,
                 null,
-                null,
-                null))
+                x.Counselor != null ? x.Counselor.FullName : null,
+                x.Student != null ? x.Student.FullName : null))
             .ToListAsync(ct);
 
         var recentAppointments = await _db.GuidanceAppointments
