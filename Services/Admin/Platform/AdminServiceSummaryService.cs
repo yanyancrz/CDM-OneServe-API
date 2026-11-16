@@ -125,11 +125,16 @@ public class AdminServiceSummaryService
 
     public async Task<GuidanceOversight> GetGuidanceAsync(CancellationToken ct = default)
     {
-        var counselors = await _db.Users
-            .AsNoTracking()
-            .Where(u => u.Role == "Counselor")
-            .Select(u => u.AccountStatus)
-            .ToListAsync(ct);
+        var counselors = await (from user in _db.Users.AsNoTracking()
+            where user.Role == "Counselor"
+            join profile in _db.GuidanceCounselorProfiles.AsNoTracking() on user.Id equals profile.UserId into profiles
+            from profile in profiles.DefaultIfEmpty()
+            orderby user.FullName, user.Id
+            select new GuidanceCounselorRow(user.Id, user.FullName, user.Email,
+                profile != null && profile.Phone != null && profile.Phone != "" ? profile.Phone : user.ContactNumber,
+                profile != null ? profile.Department : user.Institute,
+                profile != null ? profile.Specializations : null,
+                profile != null ? profile.Room : null, user.AccountStatus)).ToListAsync(ct);
 
         var appointments = await _db.GuidanceAppointments
             .AsNoTracking()
@@ -205,7 +210,7 @@ public class AdminServiceSummaryService
         return new GuidanceOversight(
             TotalCounselors: counselors.Count,
             ActiveCounselors: counselors.Count(s =>
-                string.Equals(s, "Active", StringComparison.OrdinalIgnoreCase)),
+                string.Equals(s.Status, "Active", StringComparison.OrdinalIgnoreCase)),
             TotalAppointments: appointments.Count,
             PendingAppointments: pendingAppointments,
             ApprovedAppointments: approvedAppointments,
@@ -219,6 +224,7 @@ public class AdminServiceSummaryService
             UpcomingAppointments: upcoming,
             RecentActivity: recentAppointments,
             GeneratedAt: DateTime.UtcNow) {
+                Counselors = counselors,
                 RecentRecords = new() {
                     ["appointments"] = recentAppointmentRecords.Select(x => new ServiceRecentRecord(x.Id,
                         "Appointment #" + x.Id, x.Date.ToString("yyyy-MM-dd") + " at " + x.TimeSlot,
@@ -362,6 +368,9 @@ public sealed record GuidanceAppointmentRow(
     string? CounselorName,
     string? StudentName);
 
+public sealed record GuidanceCounselorRow(int Id, string FullName, string Email, string? Contact,
+    string? Department, string? Specializations, string? Room, string Status);
+
 public sealed record GuidanceOversight(
     int TotalCounselors,
     int ActiveCounselors,
@@ -378,6 +387,7 @@ public sealed record GuidanceOversight(
     List<GuidanceAppointmentRow> UpcomingAppointments,
     List<ServiceActivity> RecentActivity,
     DateTime GeneratedAt) {
+    public List<GuidanceCounselorRow> Counselors { get; init; } = new();
     public Dictionary<string, List<ServiceRecentRecord>> RecentRecords { get; init; } = new();
 }
 
