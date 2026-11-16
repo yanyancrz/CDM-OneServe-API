@@ -79,6 +79,21 @@ public class AdminServiceSummaryService
                 x.User != null ? x.User.FullName : null))
             .ToListAsync(ct);
 
+        var recentBooks = await _db.Books.AsNoTracking()
+            .OrderByDescending(x => x.UpdatedAt).ThenByDescending(x => x.BookId).Take(20)
+            .Select(x => new ServiceRecentRecord(x.BookId, x.Title, x.Category, x.Status, x.UpdatedAt, null))
+            .ToListAsync(ct);
+        var recentLoans = await _db.BorrowTransactions.AsNoTracking()
+            .OrderByDescending(x => x.ReturnDate ?? x.BorrowDate).ThenByDescending(x => x.BorrowId).Take(20)
+            .Select(x => new ServiceRecentRecord(x.BorrowId, x.Book != null ? x.Book.Title : "Unavailable book",
+                x.User != null ? x.User.FullName : null, x.Status, x.ReturnDate ?? x.BorrowDate, x.DueDate))
+            .ToListAsync(ct);
+        var recentReservations = await _db.Reservations.AsNoTracking()
+            .OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.ReservationId).Take(20)
+            .Select(x => new ServiceRecentRecord(x.ReservationId, x.Book != null ? x.Book.Title : "Unavailable book",
+                x.User != null ? x.User.FullName : null, x.Status, x.CreatedAt, x.ExpirationDate))
+            .ToListAsync(ct);
+
         return new LibraryOversight(
             Titles: bookTotals?.Titles ?? 0,
             TotalCopies: bookTotals?.Copies ?? 0,
@@ -99,7 +114,9 @@ public class AdminServiceSummaryService
             FacultyPatrons: patronRows.Count(x =>
                 string.Equals(x.Role, "Faculty", StringComparison.OrdinalIgnoreCase)),
             RecentActivity: recentActivity,
-            GeneratedAt: DateTime.UtcNow);
+            GeneratedAt: DateTime.UtcNow) {
+                RecentRecords = new() { ["inventory"] = recentBooks, ["circulation"] = recentLoans, ["reservations"] = recentReservations }
+            };
     }
 
     // ---------------------------------------------------------
@@ -164,13 +181,23 @@ public class AdminServiceSummaryService
 
         var recentAppointments = await _db.GuidanceAppointments
             .AsNoTracking()
-            .OrderByDescending(x => x.CreatedAt)
+            .OrderByDescending(x => x.UpdatedAt).ThenByDescending(x => x.Id)
             .Take(10)
             .Select(x => new ServiceActivity(
                 "Appointment",
                 x.Status,
-                x.CreatedAt,
+                x.UpdatedAt,
                 x.Counselor != null ? x.Counselor.FullName : null))
+            .ToListAsync(ct);
+
+        var recentAppointmentRecords = await _db.GuidanceAppointments.AsNoTracking()
+            .OrderByDescending(x => x.UpdatedAt).ThenByDescending(x => x.Id).Take(20)
+            .Select(x => new { x.Id, x.Date, x.TimeSlot, x.Status, x.UpdatedAt }).ToListAsync(ct);
+        // Only report metadata; never select a student's identity, report title, narrative or private notes.
+        var recentReports = await _db.GuidanceCounselingRecords.AsNoTracking()
+            .OrderByDescending(x => x.UpdatedAt).ThenByDescending(x => x.Id).Take(20)
+            .Select(x => new ServiceRecentRecord(x.Id, "Report #" + x.Id,
+                x.Counselor != null ? x.Counselor.FullName : null, x.Status, x.UpdatedAt, null))
             .ToListAsync(ct);
 
         return new GuidanceOversight(
@@ -189,7 +216,14 @@ public class AdminServiceSummaryService
             ChatMessagesThisWeek: messagesThisWeek,
             UpcomingAppointments: upcoming,
             RecentActivity: recentAppointments,
-            GeneratedAt: DateTime.UtcNow);
+            GeneratedAt: DateTime.UtcNow) {
+                RecentRecords = new() {
+                    ["appointments"] = recentAppointmentRecords.Select(x => new ServiceRecentRecord(x.Id,
+                        "Appointment #" + x.Id, x.Date.ToString("yyyy-MM-dd") + " at " + x.TimeSlot,
+                        x.Status, x.UpdatedAt, null)).ToList(),
+                    ["systems"] = recentReports
+                }
+            };
     }
 
     // ---------------------------------------------------------
@@ -237,6 +271,18 @@ public class AdminServiceSummaryService
         var claimCounts = Group(claims);
         var scheduleCounts = Group(schedules);
 
+        var recentClaims = await _db.ClaimRecords.AsNoTracking()
+            .OrderByDescending(x => x.DecisionAt ?? x.ClaimDate).ThenByDescending(x => x.ClaimId).Take(20)
+            .Select(x => new ServiceRecentRecord(x.ClaimId, x.Report != null ? x.Report.ItemName : "Unavailable item",
+                x.Report != null ? x.Report.Category : null, x.Status, x.DecisionAt ?? x.ClaimDate, null))
+            .ToListAsync(ct);
+        var recentPickups = await _db.ClaimSchedules.AsNoTracking()
+            .OrderByDescending(x => x.CompletedAt ?? x.CreatedAt).ThenByDescending(x => x.ScheduleId).Take(20)
+            .Select(x => new ServiceRecentRecord(x.ScheduleId,
+                x.Claim != null && x.Claim.Report != null ? x.Claim.Report.ItemName : "Unavailable item",
+                x.PickupLocation, x.Status, x.CompletedAt ?? x.CreatedAt, x.ScheduledDateTime))
+            .ToListAsync(ct);
+
         return new LostFoundOversight(
             TotalReports: reports.Count,
             LostReports: reports.Count(x =>
@@ -256,7 +302,9 @@ public class AdminServiceSummaryService
             CompletedRecoveries: recoveriesCompleted,
             ScheduleStatuses: scheduleCounts,
             RecentReports: recentReports,
-            GeneratedAt: DateTime.UtcNow);
+            GeneratedAt: DateTime.UtcNow) {
+                RecentRecords = new() { ["claims"] = recentClaims, ["pickups"] = recentPickups }
+            };
     }
 
     // ---------------------------------------------------------
@@ -279,6 +327,8 @@ public sealed record ServiceActivity(
     DateTime At,
     string? Actor);
 
+public sealed record ServiceRecentRecord(int Id, string Title, string? Detail, string Status, DateTime At, DateTime? ScheduledFor);
+
 public sealed record LibraryOversight(
     int Titles,
     int TotalCopies,
@@ -294,7 +344,9 @@ public sealed record LibraryOversight(
     int StudentPatrons,
     int FacultyPatrons,
     List<ServiceActivity> RecentActivity,
-    DateTime GeneratedAt);
+    DateTime GeneratedAt) {
+    public Dictionary<string, List<ServiceRecentRecord>> RecentRecords { get; init; } = new();
+}
 
 public sealed record GuidanceAppointmentRow(
     int Id,
@@ -320,7 +372,9 @@ public sealed record GuidanceOversight(
     int ChatMessagesThisWeek,
     List<GuidanceAppointmentRow> UpcomingAppointments,
     List<ServiceActivity> RecentActivity,
-    DateTime GeneratedAt);
+    DateTime GeneratedAt) {
+    public Dictionary<string, List<ServiceRecentRecord>> RecentRecords { get; init; } = new();
+}
 
 public sealed record LostFoundReportRow(
     int ReportId,
@@ -346,4 +400,6 @@ public sealed record LostFoundOversight(
     int CompletedRecoveries,
     Dictionary<string, int> ScheduleStatuses,
     List<LostFoundReportRow> RecentReports,
-    DateTime GeneratedAt);
+    DateTime GeneratedAt) {
+    public Dictionary<string, List<ServiceRecentRecord>> RecentRecords { get; init; } = new();
+}
