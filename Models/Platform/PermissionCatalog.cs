@@ -154,7 +154,7 @@ public static class PermissionCatalog
             PermissionLevels.FullControl, PermissionLevels.FullControl),
 
         new(GuidanceView, "Guidance - view", "Services",
-            "See counselor, appointment and report COUNTS. Never narrative contents.",
+            "View counselor profiles, appointments and report statistics. SuperAdmin may also read narrative reports; private notes stay with the counselor.",
             PermissionLevels.View, PermissionLevels.FullControl),
 
         new(GuidanceManage, "Guidance - manage", "Services",
