@@ -277,19 +277,16 @@ public class LostFoundAdminService
             return LostFoundResult<List<AdminLoginActivityDto>>.Forbidden(
                 "Only a Super Admin can view administrator login activity.");
 
-        var since = DateTime.UtcNow.AddDays(-90);
         var now = DateTime.UtcNow;
 
         var rows = await (
             from s in _db.UserSessions.AsNoTracking()
             join u in _db.Users.AsNoTracking() on s.UserId equals u.Id
-            where s.CreatedAt >= since &&
-                  (u.Role == LostFoundRoles.SubAdmin ||
+            where (u.Role == LostFoundRoles.SubAdmin ||
                    u.Role == LostFoundRoles.SuperAdmin ||
                    u.Role == LostFoundRoles.LegacyAdmin)
             orderby s.CreatedAt descending
             select new { Session = s, User = u })
-            .Take(300)
             .ToListAsync(ct);
 
         var key = (currentSessionKey ?? string.Empty).Trim();
@@ -336,8 +333,14 @@ public class LostFoundAdminService
     public async Task<LostFoundResult<AdminActivityPageDto>> GetActivityLogAsync(
         int actorUserId,
         int page = 1,
-        int pageSize = 50,
+        int pageSize = 20,
         string? entityType = null,
+        string? search = null,
+        string? administrator = null,
+        string? activity = null,
+        DateOnly? date = null,
+        string? sort = null,
+        bool descending = true,
         CancellationToken ct = default)
     {
         if (!await CanManageAsync(actorUserId, ct))
@@ -354,11 +357,59 @@ public class LostFoundAdminService
         if (!string.IsNullOrWhiteSpace(entityType))
             query = query.Where(a => a.EntityType == entityType.Trim());
 
-        var total = await query.CountAsync(ct);
+        if (!string.IsNullOrWhiteSpace(administrator))
+        {
+            var name = administrator.Trim().ToLowerInvariant();
+            query = query.Where(a => a.ActorName != null && a.ActorName.ToLower().Contains(name));
+        }
+        if (!string.IsNullOrWhiteSpace(activity))
+        {
+            var action = activity.Trim().ToLowerInvariant();
+            query = query.Where(a => a.Action.ToLower().Contains(action));
+        }
+        if (date.HasValue)
+        {
+            var from = date.Value.ToDateTime(TimeOnly.MinValue);
+            query = query.Where(a => a.Timestamp >= from);
+            if (date.Value < DateOnly.MaxValue)
+            {
+                var to = from.AddDays(1);
+                query = query.Where(a => a.Timestamp < to);
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToLowerInvariant();
+            var hasId = int.TryParse(term.TrimStart('#'), out var id);
+            query = query.Where(a => a.Action.ToLower().Contains(term) ||
+                (a.ActorName != null && a.ActorName.ToLower().Contains(term)) ||
+                (a.Details != null && a.Details.ToLower().Contains(term)) ||
+                (a.EntityType != null && a.EntityType.ToLower().Contains(term)) ||
+                (a.NewStatus != null && a.NewStatus.ToLower().Contains(term)) ||
+                (hasId && a.EntityId == id));
+        }
 
-        var items = await query
-            .OrderByDescending(a => a.Timestamp)
-            .ThenByDescending(a => a.Id)
+        var total = await query.CountAsync(ct);
+        page = Math.Min(page, Math.Max(1, (int)Math.Ceiling(total / (double)pageSize)));
+        var ordered = (sort, descending) switch
+        {
+            ("actorName", false) => query.OrderBy(a => a.ActorName),
+            ("actorName", true) => query.OrderByDescending(a => a.ActorName),
+            ("actorRole", false) => query.OrderBy(a => a.ActorRole),
+            ("actorRole", true) => query.OrderByDescending(a => a.ActorRole),
+            ("details", false) => query.OrderBy(a => a.Details),
+            ("details", true) => query.OrderByDescending(a => a.Details),
+            ("action", false) => query.OrderBy(a => a.Action),
+            ("action", true) => query.OrderByDescending(a => a.Action),
+            ("entityId", false) => query.OrderBy(a => a.EntityId),
+            ("entityId", true) => query.OrderByDescending(a => a.EntityId),
+            ("newStatus", false) => query.OrderBy(a => a.NewStatus),
+            ("newStatus", true) => query.OrderByDescending(a => a.NewStatus),
+            (_, false) => query.OrderBy(a => a.Timestamp),
+            _ => query.OrderByDescending(a => a.Timestamp),
+        };
+
+        var items = await ordered.ThenByDescending(a => a.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Select(a => new AdminActivityDto

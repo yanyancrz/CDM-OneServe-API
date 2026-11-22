@@ -2,6 +2,16 @@ namespace CDM_OneServe_API.DTOs.LostFound;
 
 public class ReportDto
 {
+    internal int? ReturnSourceReportId { get; set; }
+
+    public int MissingItemId { get; set; }
+
+    public int? MissingDays { get; set; }
+    public DateTime? MissingReturnedAt { get; set; }
+    public string? LifecycleStatus { get; set; }
+    public string? ReporterName { get; set; }
+    public string? ReporterIdNumber { get; set; }
+
     public int ReportId { get; set; }
     public int UserId { get; set; }
     public string ItemName { get; set; } = string.Empty;

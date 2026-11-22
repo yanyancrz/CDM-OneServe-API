@@ -4,6 +4,11 @@ namespace CDM_OneServe_API.Models.LostFound;
 
 public class LostFoundReport
 {
+    public int? FinalMissingDays { get; set; }
+
+    [ConcurrencyCheck]
+    public DateTime? MissingReturnedAt { get; set; }
+
     [Key]
     public int ReportId { get; set; }
 

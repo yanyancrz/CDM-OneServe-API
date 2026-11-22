@@ -121,7 +121,7 @@ public class LostFoundService
         var query = _db.LostFoundReports
             .Where(r => (r.Status == "Published" || r.Status == "Found") &&
                         (r.ReportType == "Found" ||
-                         !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned")));
+                         r.MissingReturnedAt == null && !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned")));
 
         if (!string.IsNullOrWhiteSpace(type))
             query = query.Where(r => r.ReportType == type);
@@ -257,22 +257,26 @@ public class LostFoundService
         return recent;
     }
 
-    public async Task<List<ReportDto>> GetRecentLostAsync() =>
-        await _db.LostFoundReports
+    public async Task<List<ReportDto>> GetRecentLostAsync()
+    {
+        var reports = await _db.LostFoundReports
             .Where(r => r.ReportType == "Lost" && r.Status == "Published" &&
-                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned"))
+                        r.MissingReturnedAt == null && !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned"))
             .OrderByDescending(r => r.CreatedAt)
             .Take(6)
             .Select(r => ToReportDto(r))
             .ToListAsync();
+        await FillReturnedInfoAsync(reports);
+        return reports;
+    }
 
     /// <summary>A single report, if the caller may see it.</summary>
-    public async Task<ReportDto?> GetReportAsync(int id)
+    public async Task<ReportDto?> GetReportAsync(int id, int? viewerId = null)
     {
         var report = await _db.LostFoundReports
             .FirstOrDefaultAsync(r => r.ReportId == id);
 
-        if (report is null || !IsPubliclyVisible(report))
+        if (report is null || (!IsPubliclyVisible(report) && report.UserId != viewerId))
             return null;
 
         var dto = ToReportDto(report);
@@ -804,7 +808,7 @@ public class LostFoundService
         if (report.UserId == userId)
             return LostFoundResult<MyClaimDto>.BadRequest("You cannot claim your own found item report.");
 
-        if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == dto.ReportId && c.Status == "Returned"))
+        if (report.MissingReturnedAt.HasValue || await _db.ClaimRecords.AnyAsync(c => c.ReportId == dto.ReportId && c.Status == "Returned"))
             return LostFoundResult<MyClaimDto>.BadRequest("This item has already been returned to its owner.");
 
         var hasActiveClaim = await _db.ClaimRecords.AnyAsync(c =>
@@ -994,7 +998,7 @@ public class LostFoundService
             if (!IsStatus(claim.Status, "Processing"))
                 return LostFoundResult.BadRequest("Only processing claims can be approved for pickup.");
 
-            if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == claim.ReportId && c.Status == "Returned"))
+            if (report.MissingReturnedAt.HasValue || await _db.ClaimRecords.AnyAsync(c => c.ReportId == claim.ReportId && c.Status == "Returned"))
                 return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
             var previousStatus = claim.Status;
@@ -1436,8 +1440,16 @@ public class LostFoundService
             .ToListAsync();
 
         var dtos = new List<ClaimScheduleDto>();
+        var reports = schedules.Where(s => s.Claim?.Report is not null)
+            .Select(s => s.Claim!.Report!).DistinctBy(r => r.ReportId)
+            .Select(ToReportDto).ToList();
+        await FillMissingInfoAsync(reports);
+        var reportsById = reports.ToDictionary(r => r.ReportId);
         foreach (var schedule in schedules)
-            dtos.Add(await MapScheduleAsync(schedule));
+        {
+            reportsById.TryGetValue(schedule.Claim?.ReportId ?? 0, out var report);
+            dtos.Add(await MapScheduleAsync(schedule, report));
+        }
 
         return dtos;
     }
@@ -1479,7 +1491,11 @@ public class LostFoundService
 
         var report = schedule.Claim.Report;
 
-        if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == report.ReportId && c.Status == "Returned"))
+        var linkedReports = await MissingReportsAsync(new[] { report.ReportId }, track: true);
+        var group = linkedReports[report.ReportId];
+        var reportIds = group.Select(item => item.ReportId).ToArray();
+        if (group.Any(item => item.MissingReturnedAt.HasValue) ||
+            await _db.ClaimRecords.AnyAsync(c => reportIds.Contains(c.ReportId) && c.Status == "Returned"))
             return LostFoundResult.BadRequest("This item has already been returned to its owner.");
 
         var actualFinderUserId = await GetActualFinderUserIdAsync(report);
@@ -1499,14 +1515,22 @@ public class LostFoundService
         // drops off the board (board queries exclude Returned claims).
         schedule.Claim.Status = "Returned";
 
-        if (IsStatus(report.ReportType, "Lost"))
+        var startedAt = group.Min(item => item.CreatedAt);
+        foreach (var item in group)
         {
-            var recovery = await _db.RecoveryRecords
-                .Where(r => r.ReportId == schedule.Claim.ReportId && r.Status != "Rejected" && r.Status != "Completed")
-                .OrderByDescending(r => r.CreatedAt)
-                .FirstOrDefaultAsync();
+            item.MissingReturnedAt = schedule.CompletedAt;
+            item.FinalMissingDays = MissingDaysBetween(startedAt, schedule.CompletedAt!.Value);
+        }
 
-            if (recovery is not null)
+        var lostReportIds = group.Where(item => item.ReportType == "Lost").Select(item => item.ReportId).ToArray();
+        if (lostReportIds.Length > 0)
+        {
+            var recoveries = await _db.RecoveryRecords
+                .Where(r => lostReportIds.Contains(r.ReportId) && r.Status != "Rejected" && r.Status != "Completed")
+                .OrderByDescending(r => r.CreatedAt)
+                .ToListAsync();
+
+            foreach (var recovery in recoveries.DistinctBy(r => r.ReportId))
                 recovery.Status = "Completed";
         }
 
@@ -1541,7 +1565,7 @@ public class LostFoundService
         }
 
         var otherClaims = await _db.ClaimRecords
-            .Where(c => c.ReportId == schedule.Claim.ReportId &&
+            .Where(c => reportIds.Contains(c.ReportId) &&
                         c.ClaimId != schedule.ClaimId &&
                         (c.Status == "Processing" ||
                          c.Status == "Scheduled" || c.Status == "Awaiting Pickup"))
@@ -1589,7 +1613,14 @@ public class LostFoundService
             "Completed",
             $"Item {report.ItemName} (report #{report.ReportId}) released to {receivedName} ({receivedStudentId}).");
 
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return LostFoundResult.BadRequest("This item has already been returned to its owner.");
+        }
 
         return LostFoundResult.Ok("Handover completed successfully.");
     }
@@ -1688,7 +1719,9 @@ public class LostFoundService
         if (!ownsLost && !ownsFound)
             return LostFoundResult<MatchDto>.Forbidden("You can only view matches for your own reports.");
 
-        return LostFoundResult<MatchDto>.Ok(ToMatchDto(match));
+        var dto = ToMatchDto(match);
+        await FillMissingInfoAsync(new List<ReportDto> { dto.LostReport!, dto.FoundReport! });
+        return LostFoundResult<MatchDto>.Ok(dto);
     }
 
     /// <summary>
@@ -1810,7 +1843,7 @@ public class LostFoundService
             .Where(r => r.ReportId != report.ReportId &&
                         r.UserId != report.UserId &&
                         (r.Status == "Published" || r.Status == "Found") &&
-                        !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned") &&
+                        r.MissingReturnedAt == null && !_db.ClaimRecords.Any(c => c.ReportId == r.ReportId && c.Status == "Returned") &&
                         (isLost ? r.ReportType == "Found" : r.ReportType == "Lost"))
             .ToListAsync();
 
@@ -1990,6 +2023,27 @@ public class LostFoundService
         if (!ownsLost && !ownsFound && !isAdmin)
             return LostFoundResult.Forbidden("You can only confirm matches for your own reports.");
 
+        var groups = await MissingReportsAsync(new[] { match.LostReportId, match.FoundReportId }, track: true);
+        var lostGroup = groups[match.LostReportId];
+        var foundGroup = groups[match.FoundReportId];
+        if (!ReferenceEquals(lostGroup, foundGroup))
+        {
+            var lostReturn = lostGroup.FirstOrDefault(r => r.MissingReturnedAt.HasValue);
+            var foundReturn = foundGroup.FirstOrDefault(r => r.MissingReturnedAt.HasValue);
+            if (lostReturn is not null && foundReturn is not null)
+                return LostFoundResult.BadRequest("These reports already have separate confirmed returns.");
+
+            var returned = lostReturn ?? foundReturn;
+            if (returned is not null)
+            {
+                foreach (var linked in lostGroup.Concat(foundGroup))
+                {
+                    linked.MissingReturnedAt = returned.MissingReturnedAt;
+                    linked.FinalMissingDays = returned.FinalMissingDays;
+                }
+            }
+        }
+
         match.IsConfirmed = true;
         await _db.SaveChangesAsync();
 
@@ -2099,7 +2153,7 @@ public class LostFoundService
         if (report.UserId == userId)
             return LostFoundResult<RecoveryDto>.BadRequest("You cannot report recovering your own lost item.");
 
-        if (await _db.ClaimRecords.AnyAsync(c => c.ReportId == report.ReportId && c.Status == "Returned"))
+        if (report.MissingReturnedAt.HasValue || await _db.ClaimRecords.AnyAsync(c => c.ReportId == report.ReportId && c.Status == "Returned"))
             return LostFoundResult<RecoveryDto>.BadRequest("This item has already been returned and is no longer available for recovery.");
 
         var recoveryMethod = dto.RecoveryMethod?.Trim() ?? "";
@@ -2304,7 +2358,7 @@ public class LostFoundService
             PublishedReports = await reports.CountAsync(r => r.Status == "Published"),
             RejectedReports = await reports.CountAsync(r => r.Status == "Rejected"),
             ReturnedReports = await reports.CountAsync(r =>
-                claims.Any(c => c.ReportId == r.ReportId && c.Status == "Returned")),
+                r.MissingReturnedAt != null || claims.Any(c => c.ReportId == r.ReportId && c.Status == "Returned")),
             TotalClaims = await claims.CountAsync(),
             ProcessingClaims = await claims.CountAsync(c => c.Status == "Processing"),
             AwaitingPickupClaims = await claims.CountAsync(c => c.Status == "Awaiting Pickup"),
@@ -2322,11 +2376,45 @@ public class LostFoundService
         };
     }
 
-    public async Task<List<ReportDto>> GetAllReportsAsync() =>
-        await _db.LostFoundReports
+    public async Task<List<ReportDto>> GetAllReportsAsync(
+        DateOnly? from = null, DateOnly? to = null, string? category = null)
+    {
+        var query = _db.LostFoundReports.AsNoTracking();
+        if (from.HasValue)
+        {
+            var start = from.Value.ToDateTime(TimeOnly.MinValue);
+            query = query.Where(r => r.CreatedAt >= start);
+        }
+        if (to.HasValue && to.Value < DateOnly.MaxValue)
+        {
+            var end = to.Value.AddDays(1).ToDateTime(TimeOnly.MinValue);
+            query = query.Where(r => r.CreatedAt < end);
+        }
+        if (category is "Lost" or "Found")
+            query = query.Where(r => r.ReportType == category);
+
+        var reports = await query
             .OrderByDescending(r => r.CreatedAt)
+            .ThenByDescending(r => r.ReportId)
             .Select(r => ToReportDto(r))
             .ToListAsync();
+        await FillReturnedInfoAsync(reports);
+        if (category is "Claimed" or "Returned")
+            reports.RemoveAll(report => report.LifecycleStatus != category);
+
+        var userIds = reports.Select(r => r.UserId).Distinct().ToList();
+        var reporters = await _db.Users.Where(u => userIds.Contains(u.Id))
+            .Select(u => new { u.Id, u.FullName, u.IdNumber }).ToDictionaryAsync(u => u.Id);
+        foreach (var report in reports)
+        {
+            if (reporters.TryGetValue(report.UserId, out var reporter))
+            {
+                report.ReporterName = reporter.FullName;
+                report.ReporterIdNumber = reporter.IdNumber;
+            }
+        }
+        return reports;
+    }
 
     /// <summary>
     /// One item's full console view: the report, its reporter, every
@@ -2375,9 +2463,12 @@ public class LostFoundService
             .Select(m => ToMatchDto(m))
             .ToListAsync();
 
+        var reportDto = ToReportDto(report);
+        await FillReturnedInfoAsync(new List<ReportDto> { reportDto });
+
         return LostFoundResult<AdminReportDetailDto>.Ok(new AdminReportDetailDto
         {
-            Report = ToReportDto(report),
+            Report = reportDto,
             ReporterName = reporter?.FullName ?? string.Empty,
             ReporterEmail = reporter?.Email ?? string.Empty,
             ReporterIdNumber = reporter?.IdNumber ?? string.Empty,
@@ -2460,8 +2551,14 @@ public class LostFoundService
             .Where(u => finderIds.Contains(u.Id))
             .ToListAsync();
 
+        var reports = claims.Where(c => c.Report is not null).Select(c => c.Report!)
+            .DistinctBy(r => r.ReportId).Select(ToReportDto).ToList();
+        await FillMissingInfoAsync(reports);
+        var reportsById = reports.ToDictionary(r => r.ReportId);
+
         return claims.Select(c =>
         {
+            reportsById.TryGetValue(c.ReportId, out var report);
             var claimant = claimants.FirstOrDefault(u => u.Id == c.ClaimedByUserId);
             var finder = c.Report is null ? null : finders.FirstOrDefault(u => u.Id == c.Report.UserId);
 
@@ -2469,6 +2566,8 @@ public class LostFoundService
             {
                 ClaimId = c.ClaimId,
                 ReportId = c.ReportId,
+                MissingDays = report?.MissingDays,
+                MissingReturnedAt = report?.MissingReturnedAt,
                 ClaimedByUserId = c.ClaimedByUserId,
                 ClaimantName = claimant?.FullName ?? string.Empty,
                 ClaimantEmail = claimant?.Email ?? string.Empty,
@@ -2565,11 +2664,115 @@ public class LostFoundService
         ImagePath = r.ImagePath,
         ItemCustody = string.IsNullOrWhiteSpace(r.ItemCustody) ? "None" : r.ItemCustody,
         CreatedAt = r.CreatedAt,
+        MissingReturnedAt = r.MissingReturnedAt,
+        MissingDays = r.FinalMissingDays ?? MissingDaysBetween(r.CreatedAt, PhNow()),
         ReviewedByUserId = r.ReviewedByUserId,
         ReviewedByName = r.ReviewedByName,
         ReviewedByRole = r.ReviewedByRole,
         ReviewedAt = r.ReviewedAt,
     };
+
+    private static int MissingDaysBetween(DateTime start, DateTime end) =>
+        Math.Max(0, (end.Date - start.Date).Days);
+
+    private async Task<Dictionary<int, List<LostFoundReport>>> MissingReportsAsync(
+        IEnumerable<int> reportIds, CancellationToken ct = default, bool track = false)
+    {
+        var ids = reportIds.Distinct().ToArray();
+        var groups = ids.ToDictionary(id => id, _ => new List<LostFoundReport>());
+        var known = ids.ToHashSet();
+        var frontier = ids;
+        var neighbors = new Dictionary<int, HashSet<int>>();
+        while (frontier.Length > 0)
+        {
+            var links = await _db.MatchRecords
+                .Where(m => m.IsConfirmed && (frontier.Contains(m.LostReportId) || frontier.Contains(m.FoundReportId)))
+                .Select(m => new { m.LostReportId, m.FoundReportId }).ToListAsync(ct);
+
+            frontier = links.SelectMany(link => new[] { link.LostReportId, link.FoundReportId })
+                .Distinct().Where(known.Add).ToArray();
+            foreach (var link in links)
+            {
+                if (!neighbors.TryGetValue(link.LostReportId, out var found))
+                    neighbors[link.LostReportId] = found = new HashSet<int>();
+                if (!neighbors.TryGetValue(link.FoundReportId, out var lost))
+                    neighbors[link.FoundReportId] = lost = new HashSet<int>();
+                found.Add(link.FoundReportId);
+                lost.Add(link.LostReportId);
+            }
+        }
+
+        var reportQuery = track ? _db.LostFoundReports.AsTracking() : _db.LostFoundReports.AsNoTracking();
+        var reports = await reportQuery.Where(r => known.Contains(r.ReportId))
+            .ToDictionaryAsync(r => r.ReportId, ct);
+        var components = new Dictionary<int, List<LostFoundReport>>();
+        foreach (var id in ids)
+        {
+            if (!components.TryGetValue(id, out var group))
+            {
+                group = new List<LostFoundReport>();
+                var pending = new Queue<int>();
+                pending.Enqueue(id);
+                components[id] = group;
+                while (pending.TryDequeue(out var member))
+                {
+                    if (reports.TryGetValue(member, out var item))
+                        group.Add(item);
+                    if (!neighbors.TryGetValue(member, out var linked)) continue;
+                    foreach (var other in linked)
+                    {
+                        if (components.TryAdd(other, group))
+                            pending.Enqueue(other);
+                    }
+                }
+            }
+            groups[id] = group;
+        }
+        return groups;
+    }
+
+    private async Task FillMissingInfoAsync(List<ReportDto> reports, CancellationToken ct = default)
+    {
+        if (reports.Count == 0) return;
+        var groups = await MissingReportsAsync(reports.Select(r => r.ReportId), ct);
+        var ids = groups.Values.SelectMany(group => group).Select(r => r.ReportId).Distinct().ToArray();
+        var claims = await _db.ClaimRecords
+            .Where(c => ids.Contains(c.ReportId) &&
+                (c.Status == "Returned" || c.Status == "Awaiting Pickup" ||
+                 c.Status == "Approved" || c.Status == "Scheduled"))
+            .Select(c => new { c.ReportId, c.ClaimId, c.Status }).ToListAsync(ct);
+        var returnedIds = claims.Where(c => c.Status == "Returned").Select(c => c.ClaimId).ToArray();
+        var pickups = await _db.ClaimSchedules
+            .Where(s => returnedIds.Contains(s.ClaimId) && s.Status == "Completed" && s.CompletedAt != null)
+            .Select(s => new { s.ClaimId, s.CompletedAt }).ToListAsync(ct);
+        var returns = from claim in claims
+                      join pickup in pickups on claim.ClaimId equals pickup.ClaimId
+                      select new { claim.ReportId, pickup.CompletedAt };
+        var returnedByReport = returns.ToLookup(r => r.ReportId, r => r.CompletedAt);
+        var claimedIds = claims.Where(c => c.Status != "Returned").Select(c => c.ReportId).ToHashSet();
+        var now = PhNow();
+
+        foreach (var report in reports)
+        {
+            var group = groups[report.ReportId];
+            var start = group.Select(r => r.CreatedAt).DefaultIfEmpty(report.CreatedAt).Min();
+            var saved = group.Where(r => r.FinalMissingDays.HasValue && r.MissingReturnedAt.HasValue)
+                .OrderBy(r => r.MissingReturnedAt).FirstOrDefault();
+            report.MissingReturnedAt = saved?.MissingReturnedAt ??
+                group.SelectMany(r => returnedByReport[r.ReportId]).Min();
+            report.MissingDays = saved?.FinalMissingDays ??
+                MissingDaysBetween(start, report.MissingReturnedAt ?? now);
+            report.ReturnSourceReportId = group
+                .Where(r => returnedByReport[r.ReportId].Any())
+                .OrderBy(r => returnedByReport[r.ReportId].Min())
+                .Select(r => (int?)r.ReportId).FirstOrDefault();
+            report.IsReturned = report.MissingReturnedAt.HasValue;
+            report.ReturnedAt = report.MissingReturnedAt;
+            report.MissingItemId = group.Select(r => r.ReportId).DefaultIfEmpty(report.ReportId).Min();
+            report.LifecycleStatus = report.MissingReturnedAt.HasValue ? "Returned" :
+                group.Any(r => claimedIds.Contains(r.ReportId)) ? "Claimed" : report.ReportType;
+        }
+    }
 
     /// <summary>
     /// Fills who a handed-over item went back to: the receiver name the
@@ -2580,8 +2783,9 @@ public class LostFoundService
         List<ReportDto> reports, CancellationToken ct = default)
     {
         if (reports.Count == 0) return;
+        await FillMissingInfoAsync(reports, ct);
 
-        var ids = reports.Select(r => r.ReportId).ToList();
+        var ids = reports.Select(r => r.ReturnSourceReportId ?? r.ReportId).Distinct().ToList();
 
         var returnedClaims = await _db.ClaimRecords
             .Where(c => ids.Contains(c.ReportId) && c.Status == "Returned")
@@ -2622,7 +2826,7 @@ public class LostFoundService
 
         foreach (var report in reports)
         {
-            if (!latestByReport.TryGetValue(report.ReportId, out var claim))
+            if (!latestByReport.TryGetValue(report.ReturnSourceReportId ?? report.ReportId, out var claim))
                 continue;
 
             scheduleByClaim.TryGetValue(claim.ClaimId, out var schedule);
@@ -2633,7 +2837,7 @@ public class LostFoundService
                 ? claimantName
                 : schedule.ReceivedByName.Trim();
             report.ClaimedByName = claimantName;
-            report.ReturnedAt = schedule?.CompletedAt;
+            report.ReturnedAt ??= schedule?.CompletedAt;
         }
     }
 
@@ -2646,15 +2850,23 @@ public class LostFoundService
         CreatedAt = a.CreatedAt,
     };
 
-    private async Task<ClaimScheduleDto> MapScheduleAsync(ClaimSchedule s)
+    private async Task<ClaimScheduleDto> MapScheduleAsync(ClaimSchedule s, ReportDto? missing = null)
     {
         var claimant = await _db.Users.FindAsync(s.ClaimantUserId);
 
         var report = s.Claim?.Report;
         var finder = report is null ? null : await _db.Users.FindAsync(report.UserId);
 
+        if (missing is null && report is not null)
+        {
+            missing = ToReportDto(report);
+            await FillMissingInfoAsync(new List<ReportDto> { missing });
+        }
+
         return new ClaimScheduleDto
         {
+            MissingDays = missing?.MissingDays,
+            MissingReturnedAt = missing?.MissingReturnedAt,
             ScheduleId = s.ScheduleId,
             ClaimId = s.ClaimId,
             ClaimantName = claimant?.FullName ?? string.Empty,

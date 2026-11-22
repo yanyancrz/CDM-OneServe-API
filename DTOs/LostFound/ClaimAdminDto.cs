@@ -3,6 +3,9 @@ namespace CDM_OneServe_API.DTOs.LostFound;
 /** A claim as the finder / admin console sees it, with names resolved. */
 public class ClaimAdminDto
 {
+    public int? MissingDays { get; set; }
+    public DateTime? MissingReturnedAt { get; set; }
+
     public int ClaimId { get; set; }
 
     public int ReportId { get; set; }

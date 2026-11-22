@@ -1388,6 +1388,13 @@ namespace CDM_OneServe_API.Migrations
 
             modelBuilder.Entity("CDM_OneServe_API.Models.LostFound.LostFoundReport", b =>
                 {
+                    b.Property<int?>("FinalMissingDays")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("MissingReturnedAt")
+                        .IsConcurrencyToken()
+                        .HasColumnType("datetime(6)");
+
                     b.Property<int>("ReportId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int");

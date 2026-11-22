@@ -61,9 +61,16 @@ public class LostFoundAdminController : LostFoundControllerBase
     }
 
     [HttpGet("reports")]
-    public async Task<IActionResult> GetReports()
+    public async Task<IActionResult> GetReports(
+        [FromQuery] DateOnly? from = null, [FromQuery] DateOnly? to = null,
+        [FromQuery] string? category = null)
     {
-        return Ok(ApiResponse.Ok(await _service.GetAllReportsAsync()));
+        if (from.HasValue && to.HasValue && from.Value > to.Value)
+            return BadRequest(ApiResponse.Fail("From Date must be on or before To Date."));
+        if (category is not (null or "All" or "Lost" or "Found" or "Claimed" or "Returned"))
+            return BadRequest(ApiResponse.Fail("Invalid report category."));
+
+        return Ok(ApiResponse.Ok(await _service.GetAllReportsAsync(from, to, category)));
     }
 
     [HttpGet("reports/{id:int}")]
@@ -163,11 +170,17 @@ public class LostFoundAdminController : LostFoundControllerBase
     [Authorize(Roles = LostFoundRoles.Management)]
     public async Task<IActionResult> GetActivityLog(
         [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 50,
+        [FromQuery] int pageSize = 20,
         [FromQuery] string? entityType = null,
+        [FromQuery] string? search = null,
+        [FromQuery] string? administrator = null,
+        [FromQuery] string? activity = null,
+        [FromQuery] DateOnly? date = null,
+        [FromQuery] string? sort = null,
+        [FromQuery] bool descending = true,
         CancellationToken ct = default)
     {
         if (!TryGetUserId(out var userId)) return InvalidSession();
-        return ToAction(await _admins.GetActivityLogAsync(userId, page, pageSize, entityType, ct));
+        return ToAction(await _admins.GetActivityLogAsync(userId, page, pageSize, entityType, search, administrator, activity, date, sort, descending, ct));
     }
 }

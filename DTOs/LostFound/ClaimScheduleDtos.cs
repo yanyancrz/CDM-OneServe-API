@@ -23,6 +23,9 @@ public class CompleteClaimScheduleDto
 /** A pickup schedule as the admin console and claimant see it. */
 public class ClaimScheduleDto
 {
+    public int? MissingDays { get; set; }
+    public DateTime? MissingReturnedAt { get; set; }
+
     public int ScheduleId { get; set; }
 
     public int ClaimId { get; set; }

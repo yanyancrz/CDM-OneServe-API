@@ -74,7 +74,7 @@ public class LostFoundReportsController : LostFoundControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> GetReport(int id)
     {
-        var report = await _service.GetReportAsync(id);
+        var report = await _service.GetReportAsync(id, TryGetUserId(out var viewerId) ? viewerId : null);
         return report is null
             ? NotFound(ApiResponse.Fail("Report not found."))
             : Ok(ApiResponse.Ok(report));
