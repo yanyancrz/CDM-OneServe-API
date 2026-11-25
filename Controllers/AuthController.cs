@@ -1914,19 +1914,25 @@ public class AuthController : ControllerBase
 
     [Authorize(Roles = "SuperAdmin,Admin")]
     [HttpDelete("users/{id}")]
-    public async Task<IActionResult> DeleteUser(
-        int id)
+    public Task<IActionResult> DeleteUser(int id) => DeleteUserAsync(id, clearActivity: false);
+
+    [Authorize(Roles = "SuperAdmin")]
+    [HttpDelete("users/{id}/account-and-activity")]
+    public Task<IActionResult> DeleteUserAndActivity(int id) => DeleteUserAsync(id, clearActivity: true);
+
+    private async Task<IActionResult> DeleteUserAsync(int id, bool clearActivity)
     {
+        var ct = HttpContext.RequestAborted;
         if (!await _permissions.CanAsync(User, PermissionCatalog.UsersManage, PermissionLevels.Manage, HttpContext.RequestAborted)) return Forbid();
         var user = await _context.Users
-            .FirstOrDefaultAsync(x => x.Id == id);
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
 
         if (user == null)
         {
             return NotFound(new { message = "User not found." });
         }
 
-        if (user.Role == "SuperAdmin")
+        if (user.Id == GetCurrentUserId() || user.Role == "SuperAdmin")
         {
             return BadRequest(new
             {
@@ -1934,7 +1940,7 @@ public class AuthController : ControllerBase
             });
         }
 
-        if (string.Equals(
+        if (!clearActivity && string.Equals(
                 user.AccountStatus,
                 "Deleted",
                 StringComparison.OrdinalIgnoreCase))
@@ -1947,6 +1953,24 @@ public class AuthController : ControllerBase
 
         user.AccountStatus = "Deleted";
         user.IsVerified = false;
+
+        if (clearActivity)
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(ct);
+            var removed = await _context.UserActivities.Where(activity => activity.UserId == id)
+                .ExecuteDeleteAsync(ct);
+            LogAdmin($"Deleted account #{id} and cleared {removed} account activity record(s)");
+            await _context.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+
+            return Ok(new
+            {
+                message = "Account deleted and account activity cleared.",
+                deletedUserId = id,
+                accountStatus = user.AccountStatus,
+                deletedActivityCount = removed
+            });
+        }
 
         LogAdmin($"Deleted account of {user.FullName} ({user.IdNumber ?? user.Email})");
 
