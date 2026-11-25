@@ -350,6 +350,56 @@ public class AdminAuditService
         return rows;
     }
 
+    internal static string DescribeAction(string? module, string action)
+    {
+        if (module != "Guidance") return action;
+
+        var separator = action.IndexOf(' ');
+        if (separator < 0 || action[..separator] is not ("POST" or "PUT" or "PATCH" or "DELETE"))
+            return action;
+
+        var operation = action[(separator + 1)..];
+        return operation switch
+        {
+            "Book" => "Booked an appointment",
+            "Cancel" => "Cancelled an appointment",
+            "UpdateStatus" => "Updated appointment status",
+            "Reschedule" => "Rescheduled an appointment",
+            "Propose" => "Proposed a new appointment time",
+            "Accept" => "Accepted an appointment reschedule",
+            "CreateCounselor" => "Created a counselor account",
+            "UpdateCounselor" => "Updated a counselor account",
+            "SetCounselorStatus" => "Changed counselor account status",
+            "SendPasswordReset" => "Sent a counselor password reset",
+            "ChangePassword" => "Changed password",
+            "UpdateProfile" => "Updated counselor profile",
+            "UploadPhoto" or "UploadCounselorPhoto" => "Uploaded a counselor profile photo",
+            "SaveSettings" => "Saved Guidance settings",
+            "AddAvailability" => "Added an availability block",
+            "UpdateAvailability" => "Updated an availability block",
+            "DeleteAvailability" => "Deleted an availability block",
+            "ResetAvailabilityToDefault" => "Reset availability to the default schedule",
+            "AddDayOff" => "Added a day off",
+            "DeleteDayOff" => "Deleted a day off",
+            "UpsertRecord" => "Saved a counseling record",
+            "CreateNarrativeReport" => "Created a narrative report",
+            "UpdateNarrativeReport" => "Updated a narrative report",
+            "UploadNarrativeReport" => "Uploaded a narrative report",
+            "RenameNarrativeReport" => "Renamed a narrative report",
+            "FinalizeNarrativeReport" => "Finalized a narrative report",
+            "ArchiveNarrativeReport" => "Archived a narrative report",
+            "DeleteNarrativeReport" => "Deleted a narrative report",
+            "AddNarrativeAttachment" => "Added a narrative report attachment",
+            "DeleteNarrativeAttachment" => "Deleted a narrative report attachment",
+            "CreateFollowUp" => "Created a follow-up",
+            "RespondFollowUp" => "Responded to a follow-up",
+            "CancelFollowUp" => "Cancelled a follow-up",
+            "MarkRead" => "Marked a notification as read",
+            "MarkAllRead" => "Marked all notifications as read",
+            _ => System.Text.RegularExpressions.Regex.Replace(operation, "([a-z0-9])([A-Z])", "$1 $2")
+        };
+    }
+
     public async Task<AuditFacets> GetFacetsAsync(string? module, CancellationToken ct = default)
     {
         var modules = await _db.AdminActivityLogs.AsNoTracking()
@@ -374,7 +424,11 @@ public class AdminAuditService
             .Take(200)
             .ToListAsync(ct);
 
-        return new AuditFacets(modules, categories, actions);
+        var guidanceActions = await scopedRows.Where(row => row.Module == "Guidance")
+            .Select(row => row.Action).Distinct().ToListAsync(ct);
+        var actionLabels = guidanceActions.Where(actions.Contains)
+            .ToDictionary(action => action, action => DescribeAction("Guidance", action));
+        return new AuditFacets(modules, categories, actions, actionLabels);
     }
 
     /// <summary>
@@ -408,7 +462,7 @@ public class AdminAuditService
                     Csv(item.ActorRole),
                     Csv(item.Module),
                     Csv(item.Category),
-                    Csv(item.Action),
+                    Csv(item.ActionLabel),
                     Csv(item.EntityType),
                     item.EntityId?.ToString() ?? "",
                     Csv(item.PreviousStatus),
@@ -474,6 +528,8 @@ public sealed record AuditLogItem(
 {
     /// <summary>Same instant as UTC, for clients that format locally.</summary>
     public DateTime TimestampUtc => Timestamp.AddHours(-8);
+
+    public string ActionLabel => AdminAuditService.DescribeAction(Module, Action);
 }
 
 public sealed record PagedAuditLogs(
@@ -486,4 +542,5 @@ public sealed record PagedAuditLogs(
 public sealed record AuditFacets(
     List<string> Modules,
     List<string> Categories,
-    List<string> Actions);
+    List<string> Actions,
+    Dictionary<string, string> ActionLabels);

@@ -78,7 +78,8 @@ public class AdminAuditLogsController : AdminPlatformControllerBase
         {
             modules = facets.Modules,
             categories = facets.Categories,
-            actions = facets.Actions
+            actions = facets.Actions,
+            actionLabels = facets.ActionLabels
         });
     }
 
