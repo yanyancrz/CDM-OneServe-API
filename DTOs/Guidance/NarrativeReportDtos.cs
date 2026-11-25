@@ -29,6 +29,7 @@ public class NarrativeReportListItemDto
     public string Status { get; set; } = "Draft";
     public bool IsConfidential { get; set; }
     public bool HasPrivateNotes { get; set; }
+    public string? ReportFormat { get; set; }
     public int AttachmentCount { get; set; }
     public int Version { get; set; }
 

@@ -675,7 +675,8 @@ public class AdminGuidanceHeadService
         var total = await query.CountAsync(ct);
 
         var users = await query
-            .OrderBy(u => u.FullName)
+            .OrderBy(u => u.FullName.Trim().ToLower())
+            .ThenBy(u => u.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(ct);

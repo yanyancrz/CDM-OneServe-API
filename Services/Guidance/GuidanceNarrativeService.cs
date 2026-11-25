@@ -553,7 +553,19 @@ public class GuidanceNarrativeService
             .Include(r => r.Attachments)
             .ToListAsync(ct);
 
-        var items = rows.Select(r => ToListItem(r, r.Attachments.Count)).ToList();
+        var reportIds = rows.Select(r => r.Id).ToList();
+        var reportsWithUploads = (await _context.GuidanceNarrativeReportEvents.AsNoTracking()
+            .Where(e => reportIds.Contains(e.RecordId) && e.Action == "AttachmentAdded")
+            .Select(e => e.RecordId)
+            .Distinct()
+            .ToListAsync(ct)).ToHashSet();
+
+        var items = rows.Select(r =>
+        {
+            var item = ToListItem(r, r.Attachments.Count);
+            item.ReportFormat = GetReportFormat(r, item.AttachmentCount > 0 || reportsWithUploads.Contains(r.Id));
+            return item;
+        }).ToList();
 
         return new GuidancePage<NarrativeReportListItemDto>(
             items, page, (int)Math.Ceiling(total / (double)pageSize), total, pageSize);
@@ -750,6 +762,18 @@ public class GuidanceNarrativeService
         UpdatedAt = r.UpdatedAt
     };
 
+    // Match the counselor editor's classification for saved reports.
+    private static string GetReportFormat(GuidanceCounselingRecord r, bool hasUpload)
+    {
+        var hasTypedContent = new[]
+        {
+            r.SessionSummary, r.SessionObjectives, r.Observations, r.Interventions,
+            r.Recommendations, r.FollowUpPlan, r.PrivateNotes
+        }.Any(value => !string.IsNullOrWhiteSpace(value));
+
+        return hasUpload && !hasTypedContent ? "Handwritten" : "Typed";
+    }
+
     private static NarrativeReportDetailDto ToDetail(
         GuidanceCounselingRecord r, bool includePrivateNotes, bool isCounselor) => new()
     {
@@ -771,6 +795,7 @@ public class GuidanceNarrativeService
         PrivateNotes = includePrivateNotes ? r.PrivateNotes : null,
         PrivateNotesRedacted = !includePrivateNotes && !string.IsNullOrWhiteSpace(r.PrivateNotes),
         AttachmentCount = r.Attachments.Count,
+        ReportFormat = GetReportFormat(r, r.Attachments.Count > 0 || r.Events.Any(e => e.Action == "AttachmentAdded")),
         Version = r.Version,
         FinalizedAt = r.FinalizedAt,
         ArchivedAt = r.ArchivedAt,
