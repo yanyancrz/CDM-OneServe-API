@@ -1,4 +1,4 @@
-﻿using CDM_OneServe_API.Authorization;
+using CDM_OneServe_API.Authorization;
 using CDM_OneServe_API.Data;
 using CDM_OneServe_API.DTOs.Admin;
 using CDM_OneServe_API.Models;
@@ -103,7 +103,7 @@ public class AdminAnnouncementController : ControllerBase
             });
         }
 
-        if (string.IsNullOrWhiteSpace(request.Message))
+        if (request.IsActive && string.IsNullOrWhiteSpace(request.Message))
         {
             return BadRequest(new
             {
@@ -123,7 +123,7 @@ public class AdminAnnouncementController : ControllerBase
         {
             Title = request.Title.Trim(),
 
-            Message = request.Message.Trim(),
+            Message = request.Message?.Trim() ?? string.Empty,
 
             Tag = request.Tag.Trim().ToUpper(),
 
@@ -186,8 +186,7 @@ public class AdminAnnouncementController : ControllerBase
             });
         }
 
-        if (string.IsNullOrWhiteSpace(
-                request.Message))
+        if (request.IsActive && string.IsNullOrWhiteSpace(request.Message))
         {
             return BadRequest(new
             {
@@ -210,7 +209,7 @@ public class AdminAnnouncementController : ControllerBase
             request.Title.Trim();
 
         announcement.Message =
-            request.Message.Trim();
+            request.Message?.Trim() ?? string.Empty;
 
         announcement.Tag =
             request.Tag.Trim().ToUpper();

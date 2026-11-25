@@ -117,7 +117,12 @@ public class AdminEventsController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateEventRequest request)
+    public Task<IActionResult> Create([FromBody] CreateEventRequest request) => CreateEvent(request, isActive: true);
+
+    [HttpPost("drafts")]
+    public Task<IActionResult> CreateDraft([FromBody] CreateEventRequest request) => CreateEvent(request, isActive: false);
+
+    private async Task<IActionResult> CreateEvent(CreateEventRequest request, bool isActive)
     {
         if (string.IsNullOrWhiteSpace(request.Title))
             return BadRequest(new { message = "Title is required." });
@@ -147,13 +152,13 @@ public class AdminEventsController : ControllerBase
             Location = request.Location,
             Tag = request.Tag ?? "CAMPUS",
             Accent = request.Accent ?? "#F4D35E",
-            IsActive = true,
+            IsActive = isActive,
         };
 
         _context.Events.Add(ev);
         await _context.SaveChangesAsync();
 
-        return Ok(new { message = "Event created.", id = ev.Id });
+        return Ok(new { message = isActive ? "Event created." : "Event saved as draft.", id = ev.Id });
     }
 
     [HttpPut("{id}")]
