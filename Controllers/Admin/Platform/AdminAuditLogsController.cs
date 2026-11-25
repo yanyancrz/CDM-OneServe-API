@@ -65,14 +65,14 @@ public class AdminAuditLogsController : AdminPlatformControllerBase
 
     // GET: api/admin/audit-logs/facets
     [HttpGet("facets")]
-    public async Task<IActionResult> GetFacets(CancellationToken ct)
+    public async Task<IActionResult> GetFacets([FromQuery] string? module, CancellationToken ct)
     {
         var auth = await AuthorizeAsync(
             PermissionCatalog.AuditView, PermissionLevels.View, ct);
 
         if (auth.Failure is not null) return auth.Failure;
 
-        var facets = await Audit.GetFacetsAsync(ct);
+        var facets = await Audit.GetFacetsAsync(module, ct);
 
         return Ok(new
         {

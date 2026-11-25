@@ -215,13 +215,7 @@ public class AdminAuditService
         var page = Math.Max(1, query.Page);
         var pageSize = Math.Clamp(query.PageSize, 10, 100);
 
-        var rows = _db.AdminActivityLogs.AsNoTracking();
-
-        if (!string.IsNullOrWhiteSpace(query.Module))
-        {
-            var module = query.Module.Trim();
-            rows = rows.Where(x => x.Module == module);
-        }
+        var rows = ApplyModuleFilter(query.Module);
 
         if (!string.IsNullOrWhiteSpace(query.Category))
         {
@@ -335,7 +329,28 @@ public class AdminAuditService
             .FirstOrDefaultAsync(ct);
     }
 
-    public async Task<AuditFacets> GetFacetsAsync(CancellationToken ct = default)
+    private IQueryable<AdminActivityLog> ApplyModuleFilter(string? module)
+    {
+        var rows = _db.AdminActivityLogs.AsNoTracking();
+        if (string.IsNullOrWhiteSpace(module)) return rows;
+
+        var key = module.Trim();
+        rows = rows.Where(row => row.Module == key);
+        if (key.Equals("Library", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("Guidance", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("Clinic", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("LostFound", StringComparison.OrdinalIgnoreCase))
+        {
+            // Use the recorded role when present. Legacy rows may only have the actor ID.
+            rows = rows.Where(row => row.ActorRole != "SuperAdmin" &&
+                ((row.ActorRole != null && row.ActorRole != "") ||
+                 !_db.Users.Any(user => user.Id == row.UserId && user.Role == "SuperAdmin")));
+        }
+
+        return rows;
+    }
+
+    public async Task<AuditFacets> GetFacetsAsync(string? module, CancellationToken ct = default)
     {
         var modules = await _db.AdminActivityLogs.AsNoTracking()
             .Where(x => x.Module != null)
@@ -344,14 +359,15 @@ public class AdminAuditService
             .OrderBy(x => x)
             .ToListAsync(ct);
 
-        var categories = await _db.AdminActivityLogs.AsNoTracking()
+        var scopedRows = ApplyModuleFilter(module);
+        var categories = await scopedRows
             .Where(x => x.Category != null)
             .Select(x => x.Category!)
             .Distinct()
             .OrderBy(x => x)
             .ToListAsync(ct);
 
-        var actions = await _db.AdminActivityLogs.AsNoTracking()
+        var actions = await scopedRows
             .Select(x => x.Action)
             .Distinct()
             .OrderBy(x => x)
