@@ -1634,6 +1634,11 @@ public class AuthController : ControllerBase
                 email,
                 StringComparison.OrdinalIgnoreCase);
 
+            if (emailChanged && user.Role == "SuperAdmin")
+            {
+                return BadRequest(new { message = "Super Admin email changes require OTP verification in My Profile." });
+            }
+
             user.Email = email;
 
             if (emailChanged)

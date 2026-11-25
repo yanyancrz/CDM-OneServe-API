@@ -656,12 +656,8 @@ public class ProfileController : ControllerBase
                 "This email is already being used by another account.");
         }
 
-        var otpCode =
-            Random.Shared
-                .Next(
-                    100000,
-                    999999)
-                .ToString();
+        var otpCode = System.Security.Cryptography.RandomNumberGenerator
+            .GetInt32(100000, 1000000).ToString();
 
         var existing =
             _context.EmailChangeRequests
@@ -713,6 +709,19 @@ public class ProfileController : ControllerBase
             });
 
         await _context.SaveChangesAsync();
+
+        if (user.Role == "SuperAdmin")
+        {
+            try
+            {
+                await _emailService.SendOtpAsync(newEmail, otpCode, "emailchange");
+                return Ok("OTP sent to new email");
+            }
+            catch
+            {
+                return StatusCode(503, "Unable to send the verification code. Please try again.");
+            }
+        }
 
         _ = Task.Run(async () =>
         {
@@ -794,6 +803,12 @@ public class ProfileController : ControllerBase
         // (ToLower() instead of StringComparison — EF Core MySQL
         //  cannot translate the StringComparison overload.)
         // =====================================================
+
+        if (request.NewEmail is not null &&
+            !string.Equals(request.NewEmail.Trim(), record.NewEmail, StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest("This OTP was issued for a different email address.");
+        }
 
         var pendingEmailLower =
             record.NewEmail.Trim().ToLower();

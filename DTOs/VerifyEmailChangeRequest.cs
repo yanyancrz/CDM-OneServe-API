@@ -4,5 +4,7 @@ public class VerifyEmailChangeRequest
 {
     public int UserId { get; set; }
 
+    public string? NewEmail { get; set; }
+
     public string OTPCode { get; set; } = "";
 }
