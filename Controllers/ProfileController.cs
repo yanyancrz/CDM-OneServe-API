@@ -37,7 +37,7 @@ public class ProfileController : ControllerBase
     // na SaveChanges().
     // =========================================================
 
-    private void LogAdmin(int userId, string? role, string action)
+    private void LogAdmin(int userId, string? role, string action, string? actorName = null)
     {
         if (role == "Student" || role == "Faculty")
             return;
@@ -47,7 +47,16 @@ public class ProfileController : ControllerBase
             {
                 UserId = userId,
                 Action = action,
-                Timestamp = DateTime.Now
+                Timestamp = DateTime.UtcNow.AddHours(8), // PH wall clock, like AdminAuditService
+
+                // Central audit fields: without these the row showed no
+                // module and a raw user id instead of a name on the
+                // central audit page.
+                Module = "Users",
+                Category = "User Management",
+                ActorName = actorName,
+                ActorRole = role,
+                EntityType = "User"
             });
     }
 
@@ -868,7 +877,8 @@ public class ProfileController : ControllerBase
         LogAdmin(
             user.Id,
             user.Role,
-            $"{user.FullName} changed their email to {user.Email}");
+            $"{user.FullName} changed their email to {user.Email}",
+            user.FullName);
 
         _context.SaveChanges();
 
@@ -1011,7 +1021,8 @@ public class ProfileController : ControllerBase
         LogAdmin(
             user.Id,
             user.Role,
-            $"{user.FullName} changed their password");
+            $"{user.FullName} changed their password",
+            user.FullName);
 
         _context.SaveChanges();
 
@@ -1230,7 +1241,8 @@ public class ProfileController : ControllerBase
         LogAdmin(
             user.Id,
             user.Role,
-            $"{user.FullName} changed their password");
+            $"{user.FullName} changed their password",
+            user.FullName);
 
         await _context.SaveChangesAsync();
 

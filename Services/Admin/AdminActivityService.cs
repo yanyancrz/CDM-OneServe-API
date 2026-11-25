@@ -35,11 +35,24 @@ public class AdminActivityService
         int userId,
         string action)
     {
+        var actor = await _context.Users
+            .AsNoTracking()
+            .Where(u => u.Id == userId)
+            .Select(u => new { u.FullName, u.Role })
+            .FirstOrDefaultAsync();
+
         var activity = new AdminActivityLog
         {
             UserId = userId,
             Action = action,
-            Timestamp = DateTime.Now
+            Timestamp = DateTime.UtcNow.AddHours(8), // PH wall clock, like AdminAuditService
+
+            // Central audit fields: these account rows now appear on the
+            // central audit page with a real module, category and actor.
+            Module = "Users",
+            Category = "User Management",
+            ActorName = actor?.FullName,
+            ActorRole = actor?.Role
         };
 
         _context.AdminActivityLogs.Add(activity);
